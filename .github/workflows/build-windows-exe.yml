@@ -1,0 +1,64 @@
+name: Build cmd Text Expander
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build portable cmd.exe
+        shell: cmd
+        run: build.bat
+
+      - name: Validate Windows executable
+        shell: powershell
+        run: |
+          if (!(Test-Path "publish\cmd.exe")) { throw "publish\cmd.exe was not created" }
+          $bytes = [System.IO.File]::ReadAllBytes("publish\cmd.exe")
+          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw "Not a Windows EXE: missing MZ header" }
+          Write-Host "Valid Windows EXE MZ header found"
+
+      - name: Prepare artifact
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path artifact | Out-Null
+          Copy-Item "publish\cmd.exe" "artifact\cmd.exe"
+          if (Test-Path "publish\*.dll") { Copy-Item "publish\*.dll" "artifact" -ErrorAction SilentlyContinue }
+          Copy-Item "README.md" "artifact\README.md"
+          Copy-Item "build.bat" "artifact\build.bat"
+          Copy-Item "src" "artifact\src" -Recurse
+          @'
+[
+  {
+    "keyword": ";hi",
+    "text": "أهلاً بحضرتك، معاك إسلام من خدمة عملاء WE. ازاي أقدر أساعد حضرتك؟",
+    "group": "Default",
+    "enabled": true
+  },
+  {
+    "keyword": ";thanks",
+    "text": "تحت أمرك يا فندم، سعدت بمساعدة حضرتك ونتمنالك يوم سعيد.",
+    "group": "Default",
+    "enabled": true
+  }
+]
+'@ | Set-Content -Path "artifact\snippets.json" -Encoding UTF8
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cmd_text_expander_final
+          path: artifact/*
+          if-no-files-found: error
