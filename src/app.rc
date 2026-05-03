@@ -1,13 +1,9 @@
 #include <windows.h>
-
-#define IDI_APPICON 101
 #define IDR_MANIFEST 1
-
 IDR_MANIFEST RT_MANIFEST "app.manifest"
-
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,3,0,0
- PRODUCTVERSION 1,3,0,0
+ FILEVERSION 1,4,0,0
+ PRODUCTVERSION 1,4,0,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -23,12 +19,12 @@ BEGIN
         BLOCK "040904B0"
         BEGIN
             VALUE "CompanyName", "cmd Productivity Tools"
-            VALUE "FileDescription", "cmd Text Expander - Portable Windows productivity software"
-            VALUE "FileVersion", "1.3.0.0"
-            VALUE "InternalName", "cmdTextExpander"
-            VALUE "OriginalFilename", "cmdTextExpander.exe"
-            VALUE "ProductName", "cmd Text Expander"
-            VALUE "ProductVersion", "1.3.0.0"
+            VALUE "FileDescription", "cmd - Portable text expansion utility"
+            VALUE "FileVersion", "1.4.0.0"
+            VALUE "InternalName", "cmd"
+            VALUE "OriginalFilename", "cmd.exe"
+            VALUE "ProductName", "cmd"
+            VALUE "ProductVersion", "1.4.0.0"
             VALUE "LegalCopyright", "Copyright cmd Productivity Tools"
             VALUE "Comments", "Portable text expansion utility for Windows"
         END

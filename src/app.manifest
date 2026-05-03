@@ -1,17 +1,9 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity
-    version="1.3.0.0"
-    processorArchitecture="*"
-    name="cmdProductivityTools.cmdTextExpander"
-    type="win32" />
-  <description>cmd Text Expander - Portable Windows productivity tool</description>
+  <assemblyIdentity version="1.4.0.0" processorArchitecture="*" name="cmdProductivityTools.cmd" type="win32" />
+  <description>cmd - Portable text expansion utility</description>
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
-    <security>
-      <requestedPrivileges>
-        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
-      </requestedPrivileges>
-    </security>
+    <security><requestedPrivileges><requestedExecutionLevel level="asInvoker" uiAccess="false" /></requestedPrivileges></security>
   </trustInfo>
   <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
     <application>
