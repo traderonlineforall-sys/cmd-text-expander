@@ -27,6 +27,7 @@ public sealed class NativeTextEngine : IDisposable
     private IntPtr _hook = IntPtr.Zero;
     private bool _enabled;
     private bool _internalPaste;
+    private bool _expansionPending;
 
     public bool Enabled => _enabled;
 
@@ -47,7 +48,7 @@ public sealed class NativeTextEngine : IDisposable
         }
         _enabled = true;
         _buffer.Clear();
-        _status("Enabled. Type a saved keyword to expand immediately.");
+        _status("Enabled. Beeftext-style expansion is active.");
     }
 
     public void Stop()
@@ -68,7 +69,7 @@ public sealed class NativeTextEngine : IDisposable
 
     private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (nCode < 0 || !_enabled || _internalPaste)
+        if (nCode < 0 || !_enabled || _internalPaste || _expansionPending)
             return CallNextHookEx(_hook, nCode, wParam, lParam);
 
         if (wParam != (IntPtr)WM_KEYDOWN && wParam != (IntPtr)WM_SYSKEYDOWN)
@@ -99,11 +100,12 @@ public sealed class NativeTextEngine : IDisposable
         if (IsDelimiter(key))
         {
             var keyword = _buffer.ToString();
-            var match = _store.MatchKeyword(keyword);
+            var delimiterMatch = _store.MatchKeyword(keyword);
             _buffer.Clear();
-            if (match is not null)
+            if (delimiterMatch is not null)
             {
-                _ui.BeginInvoke(new Action(() => ReplaceInTargetWindow(targetWindow, keyword.Length, match.Text)));
+                _expansionPending = true;
+                QueueReplacement(targetWindow, keyword.Length, delimiterMatch.Text, 35);
                 return (IntPtr)1;
             }
             return CallNextHookEx(_hook, nCode, wParam, lParam);
@@ -117,20 +119,40 @@ public sealed class NativeTextEngine : IDisposable
         if (printable.Length == 0)
             return CallNextHookEx(_hook, nCode, wParam, lParam);
 
-        var before = _buffer.ToString();
-        var candidate = before + printable;
+        _buffer.Append(printable);
+        if (_buffer.Length > 120) _buffer.Remove(0, _buffer.Length - 120);
+
+        var candidate = _buffer.ToString();
         var matchNow = FindImmediateMatch(candidate);
         if (matchNow is not null)
         {
-            var alreadyTypedChars = Math.Max(0, matchNow.Keyword.Length - printable.Length);
+            var charsToDelete = matchNow.Keyword.Length;
             _buffer.Clear();
-            _ui.BeginInvoke(new Action(() => ReplaceInTargetWindow(targetWindow, alreadyTypedChars, matchNow.Text)));
-            return (IntPtr)1;
+            _expansionPending = true;
+            QueueReplacement(targetWindow, charsToDelete, matchNow.Text, 75);
+            // Do NOT block the final typed key. Let Windows type it first, then replace the whole keyword.
+            // This prevents losing characters when expansion fails or starts too early.
+            return CallNextHookEx(_hook, nCode, wParam, lParam);
         }
 
-        _buffer.Append(printable);
-        if (_buffer.Length > 120) _buffer.Remove(0, _buffer.Length - 120);
         return CallNextHookEx(_hook, nCode, wParam, lParam);
+    }
+
+    private void QueueReplacement(IntPtr targetWindow, int charsToDelete, string replacement, int delayMs)
+    {
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            Thread.Sleep(delayMs);
+            try
+            {
+                if (_ui.IsDisposed) return;
+                _ui.BeginInvoke(new Action(() => ReplaceInTargetWindow(targetWindow, charsToDelete, replacement)));
+            }
+            catch
+            {
+                _expansionPending = false;
+            }
+        });
     }
 
     private Snippet? FindImmediateMatch(string buffer)
@@ -173,21 +195,24 @@ public sealed class NativeTextEngine : IDisposable
             if (targetWindow != IntPtr.Zero && targetWindow != _ui.Handle)
             {
                 SetForegroundWindow(targetWindow);
-                Thread.Sleep(30);
+                Thread.Sleep(40);
             }
 
             if (charsToDelete > 0)
+            {
                 SendBackspaces(charsToDelete);
+                Thread.Sleep(15);
+            }
 
             var oldText = Clipboard.ContainsText() ? Clipboard.GetText() : null;
             Clipboard.SetText(replacement ?? string.Empty);
-            Thread.Sleep(20);
+            Thread.Sleep(25);
             SendCtrlV();
             _status("Expanded snippet.");
 
             if (oldText is not null)
             {
-                var timer = new System.Windows.Forms.Timer { Interval = 700 };
+                var timer = new System.Windows.Forms.Timer { Interval = 900 };
                 timer.Tick += (_, _) =>
                 {
                     timer.Stop();
@@ -204,6 +229,7 @@ public sealed class NativeTextEngine : IDisposable
         finally
         {
             _internalPaste = false;
+            _expansionPending = false;
         }
     }
 
