@@ -1,12 +1,12 @@
 @echo off
-rem Build script for chrome Text Expander v21 GUI
+rem Build script for cmd Text Expander v20 GUI
 
 setlocal
 cd /d "%~dp0"
 
-set SRC=src\chrome_gui.cpp
+set SRC=src\cmd_gui.cpp
 set OUTDIR=publish
-set OUTEXE=%OUTDIR%\chrome.exe
+set OUTEXE=%OUTDIR%\cmd.exe
 
 if exist %OUTDIR% rmdir /s /q %OUTDIR%
 mkdir %OUTDIR%

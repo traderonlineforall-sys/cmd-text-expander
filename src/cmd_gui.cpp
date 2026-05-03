@@ -24,35 +24,15 @@
 #include <unordered_map>
 #include <vector>
 
-// cmd Text Expander v21
-// Independent implementation of Beeftext-like behavior:
-// - global keyboard hook
-// - reverse trie matching for large snippet sets
-// - longest keyword wins
-// - Arabic-aware normalization
-// - exact raw-character deletion using event mapping
-// - clipboard paste with restoration
-// - visible GUI
-
 struct Snippet {
     std::wstring keyword;
     std::wstring keyNorm;
     std::wstring text;
 };
 
-struct KeyEvent {
-    std::wstring raw;
-    std::wstring norm;
-};
-
 struct TrieNode {
     int snippetIndex = -1;
     std::unordered_map<wchar_t, int> next;
-};
-
-struct Match {
-    int index = -1;
-    int rawDelete = 0;
 };
 
 static HINSTANCE gInst{};
@@ -63,11 +43,9 @@ static bool gExpanding = false;
 
 static std::vector<Snippet> gSnips;
 static std::vector<TrieNode> gTrie;
-static std::vector<KeyEvent> gEvents;
+static std::wstring gRawBuffer;
 static std::wstring gNormBuffer;
-
-static const size_t HARD_EVENT_LIMIT = 2048;
-static size_t gMaxEvents = 512;
+static size_t gMaxRawBuffer = 512;
 
 static const UINT WM_DO_EXPAND = WM_APP + 10;
 static HWND gTarget{};
@@ -90,14 +68,6 @@ static std::wstring Utf8ToWide(const std::string& s) {
     if (n <= 0) return L"";
     std::wstring out(n, 0);
     MultiByteToWideChar(cp, flags, s.data(), (int)s.size(), &out[0], n);
-    return out;
-}
-
-static std::string WideToUtf8(const std::wstring& w) {
-    if (w.empty()) return "";
-    int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), nullptr, 0, nullptr, nullptr);
-    std::string out(n, 0);
-    WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), &out[0], n, nullptr, nullptr);
     return out;
 }
 
@@ -153,7 +123,6 @@ static wchar_t NormChar(wchar_t c) {
     if (c == 0x066B) return L'.'; // Arabic decimal separator
     if (c == 0x066C) return L','; // Arabic thousands separator
     if (c == 0x061B) return L';'; // Arabic semicolon
-    if (c == 0x060C) return L','; // Arabic comma
 
     return (wchar_t)towlower(c);
 }
@@ -209,7 +178,7 @@ static std::wstring JsonUnescape(const std::wstring& s) {
                     wchar_t first = (wchar_t)((a << 12) | (b << 8) | (c << 4) | d);
                     i += 4;
 
-                    // Preserve surrogate pair if present.
+                    // Basic surrogate-pair handling for completeness.
                     if (first >= 0xD800 && first <= 0xDBFF && i + 6 < s.size() && s[i + 1] == L'\\' && s[i + 2] == L'u') {
                         int e = Hex(s[i + 3]), f = Hex(s[i + 4]), g = Hex(s[i + 5]), h = Hex(s[i + 6]);
                         if (e >= 0 && f >= 0 && g >= 0 && h >= 0) {
@@ -232,19 +201,6 @@ static std::wstring JsonUnescape(const std::wstring& s) {
         }
     }
 
-    return out;
-}
-
-static std::wstring JsonEscape(const std::wstring& s) {
-    std::wstring out;
-    for (wchar_t c : s) {
-        if (c == L'\\') out += L"\\\\";
-        else if (c == L'"') out += L"\\\"";
-        else if (c == L'\n') out += L"\\n";
-        else if (c == L'\r') out += L"\\r";
-        else if (c == L'\t') out += L"\\t";
-        else out.push_back(c);
-    }
     return out;
 }
 
@@ -323,7 +279,7 @@ static bool GetJsonString(const std::wstring& obj, const std::vector<std::wstrin
 static void BuildReverseTrie() {
     gTrie.clear();
     gTrie.emplace_back();
-    gMaxEvents = 512;
+    gMaxRawBuffer = 512;
 
     for (size_t i = 0; i < gSnips.size(); ++i) {
         const std::wstring& key = gSnips[i].keyNorm;
@@ -345,12 +301,10 @@ static void BuildReverseTrie() {
             }
         }
 
-        // Latest duplicate wins, like many text expander imports.
+        // Latest duplicate wins.
         gTrie[node].snippetIndex = (int)i;
-        gMaxEvents = std::max<size_t>(gMaxEvents, gSnips[i].keyword.size() + 64);
+        gMaxRawBuffer = std::max<size_t>(gMaxRawBuffer, gSnips[i].keyword.size() + 64);
     }
-
-    if (gMaxEvents > HARD_EVENT_LIMIT) gMaxEvents = HARD_EVENT_LIMIT;
 }
 
 static void LoadSnippets() {
@@ -374,62 +328,64 @@ static void LoadSnippets() {
 
     if (gSnips.empty()) {
         gSnips.push_back({L";hi", Normalize(L";hi"), L"Hello"});
-        gSnips.push_back({L"ab", Normalize(L"ab"), L"Arabic-like test"});
+        gSnips.push_back({L"ab", Normalize(L"ab"), L"ARABIC TEST"});
         gSnips.push_back({L"2.", Normalize(L"2."), L"DOT TEST"});
     }
 
     BuildReverseTrie();
 }
 
+struct Match {
+    int index = -1;
+    int rawDelete = 0;
+};
+
 static Match FindMatch() {
     Match m;
-    if (gEvents.empty() || gTrie.empty()) return m;
+    if (gNormBuffer.empty() || gTrie.empty()) return m;
 
     int node = 0;
     int bestIndex = -1;
-    int bestRawDelete = 0;
-    int rawConsumed = 0;
+    std::wstring bestNormSuffix;
 
-    for (int e = (int)gEvents.size() - 1; e >= 0; --e) {
-        const KeyEvent& ev = gEvents[e];
-        rawConsumed += (int)ev.raw.size();
+    for (int p = (int)gNormBuffer.size() - 1; p >= 0; --p) {
+        wchar_t c = gNormBuffer[p];
+        auto found = gTrie[node].next.find(c);
+        if (found == gTrie[node].next.end()) break;
 
-        // Empty normalized event: ignored character, but if it follows a keyword
-        // it should still be deleted with the keyword.
-        if (ev.norm.empty()) {
-            if (gTrie[node].snippetIndex >= 0) {
-                bestIndex = gTrie[node].snippetIndex;
-                bestRawDelete = rawConsumed;
-            }
-            continue;
-        }
-
-        for (int j = (int)ev.norm.size() - 1; j >= 0; --j) {
-            wchar_t c = ev.norm[j];
-
-            auto found = gTrie[node].next.find(c);
-            if (found == gTrie[node].next.end()) {
-                if (bestIndex >= 0) {
-                    m.index = bestIndex;
-                    m.rawDelete = bestRawDelete;
-                }
-                return m;
-            }
-
-            node = found->second;
-
-            if (gTrie[node].snippetIndex >= 0) {
-                bestIndex = gTrie[node].snippetIndex;
-                bestRawDelete = rawConsumed;
-            }
+        node = found->second;
+        if (gTrie[node].snippetIndex >= 0) {
+            bestIndex = gTrie[node].snippetIndex;
+            bestNormSuffix = gSnips[bestIndex].keyNorm;
         }
     }
 
-    if (bestIndex >= 0) {
-        m.index = bestIndex;
-        m.rawDelete = bestRawDelete;
+    if (bestIndex < 0) return m;
+
+    int rawDelete = 0;
+    bool exactRawFound = false;
+    std::wstring rebuilt;
+
+    for (int p = (int)gRawBuffer.size() - 1; p >= 0; --p) {
+        rebuilt.insert(rebuilt.begin(), gRawBuffer[p]);
+        ++rawDelete;
+
+        if (Normalize(rebuilt) == bestNormSuffix) {
+            exactRawFound = true;
+            break;
+        }
     }
 
+    int keywordRawLength = (int)gSnips[bestIndex].keyword.size();
+
+    // Strong fix for cases like keyword "2." leaving "2":
+    // if raw calculation under-counts for punctuation/layout reasons,
+    // use at least the original keyword raw length.
+    if (!exactRawFound) rawDelete = keywordRawLength;
+    else rawDelete = std::max(rawDelete, keywordRawLength);
+
+    m.index = bestIndex;
+    m.rawDelete = rawDelete;
     return m;
 }
 
@@ -453,17 +409,25 @@ static void RefreshUi() {
 }
 
 static void ReleaseMods() {
+    INPUT in[10]{};
+    int n = 0;
     WORD keys[] = {VK_CONTROL, VK_MENU, VK_SHIFT, VK_LCONTROL, VK_RCONTROL, VK_LMENU, VK_RMENU, VK_LSHIFT, VK_RSHIFT, VK_LWIN, VK_RWIN};
 
     for (WORD vk : keys) {
-        INPUT in{};
-        in.type = INPUT_KEYBOARD;
-        in.ki.wVk = vk;
-        in.ki.dwFlags = KEYEVENTF_KEYUP;
-        SendInput(1, &in, sizeof(INPUT));
+        in[n].type = INPUT_KEYBOARD;
+        in[n].ki.wVk = vk;
+        in[n].ki.dwFlags = KEYEVENTF_KEYUP;
+        ++n;
+
+        if (n == 10) {
+            SendInput(n, in, sizeof(INPUT));
+            ZeroMemory(in, sizeof(in));
+            n = 0;
+        }
     }
 
-    Sleep(80);
+    if (n > 0) SendInput(n, in, sizeof(INPUT));
+    Sleep(35);
 }
 
 static void Key(WORD vk, bool up) {
@@ -475,7 +439,7 @@ static void Key(WORD vk, bool up) {
 }
 
 static bool OpenClip() {
-    for (int i = 0; i < 30; ++i) {
+    for (int i = 0; i < 20; ++i) {
         if (OpenClipboard(gWnd)) return true;
         Sleep(10);
     }
@@ -520,12 +484,6 @@ static bool SetClip(const std::wstring& s) {
     }
 
     void* p = GlobalLock(h);
-    if (!p) {
-        GlobalFree(h);
-        CloseClipboard();
-        return false;
-    }
-
     memcpy(p, s.c_str(), bytes);
     GlobalUnlock(h);
 
@@ -546,7 +504,7 @@ static void DoExpand() {
 
     if (gTarget) {
         SetForegroundWindow(gTarget);
-        Sleep(60);
+        Sleep(50);
     }
 
     ReleaseMods();
@@ -567,7 +525,7 @@ static void DoExpand() {
         return;
     }
 
-    Sleep(40);
+    Sleep(35);
     Key(VK_CONTROL, false);
     Key('V', false);
     Key('V', true);
@@ -579,7 +537,7 @@ static void DoExpand() {
         Key(gDelimiterToSend, true);
     }
 
-    Sleep(120);
+    Sleep(100);
 
     if (couldReadClipboard) {
         if (hadText) SetClip(old);
@@ -596,42 +554,30 @@ static bool OwnWindow() {
 }
 
 static void ClearBuffer() {
-    gEvents.clear();
+    gRawBuffer.clear();
     gNormBuffer.clear();
 }
 
-static void RebuildNormBuffer() {
-    gNormBuffer.clear();
-    for (const auto& ev : gEvents) {
-        gNormBuffer += ev.norm;
-    }
-}
+static void AddToBuffer(const std::wstring& t) {
+    if (t.empty()) return;
 
-static void AddToBuffer(const std::wstring& raw) {
-    if (raw.empty()) return;
+    gRawBuffer += t;
 
-    KeyEvent ev{raw, Normalize(raw)};
-    gEvents.push_back(ev);
-
-    if (gEvents.size() > gMaxEvents) {
-        size_t excess = gEvents.size() - gMaxEvents;
-        gEvents.erase(gEvents.begin(), gEvents.begin() + (ptrdiff_t)excess);
+    if (gRawBuffer.size() > gMaxRawBuffer) {
+        gRawBuffer.erase(0, gRawBuffer.size() - gMaxRawBuffer);
     }
 
-    RebuildNormBuffer();
+    gNormBuffer = Normalize(gRawBuffer);
 }
 
 static std::wstring KeyText(KBDLLHOOKSTRUCT* k) {
     BYTE st[256];
-    if (!GetKeyboardState(st)) ZeroMemory(st, sizeof(st));
+    if (!GetKeyboardState(st)) return L"";
 
-    // Low-level keyboard hooks run before the target app updates its key state.
-    // Force the current key and live modifier states.
+    // Critical Arabic fix:
+    // Low-level keyboard hooks receive the event before the normal thread
+    // state is fully updated, so force the current VK into the pressed state.
     st[k->vkCode] |= 0x80;
-
-    if (GetAsyncKeyState(VK_SHIFT) & 0x8000) st[VK_SHIFT] |= 0x80;
-    if (GetAsyncKeyState(VK_CONTROL) & 0x8000) st[VK_CONTROL] |= 0x80;
-    if (GetAsyncKeyState(VK_MENU) & 0x8000) st[VK_MENU] |= 0x80;
 
     HWND fg = GetForegroundWindow();
     DWORD tid = fg ? GetWindowThreadProcessId(fg, nullptr) : GetCurrentThreadId();
@@ -642,8 +588,7 @@ static std::wstring KeyText(KBDLLHOOKSTRUCT* k) {
 
     if (r > 0) return std::wstring(buf, r);
 
-    // Punctuation/numpad fallbacks. This fixes common cases like 2. when
-    // the layout fails to emit punctuation through ToUnicodeEx.
+    // Fallbacks for punctuation/numpad cases that sometimes fail in layouts.
     switch (k->vkCode) {
     case VK_DECIMAL: return L".";
     case VK_OEM_PERIOD: return L".";
@@ -689,16 +634,6 @@ static bool IsDelimiterVk(DWORD vk, WORD& outVk, std::wstring& rawDelimiter) {
     return false;
 }
 
-static void StartExpansion(const Match& m, WORD delimiterToSend) {
-    gTarget = GetForegroundWindow();
-    gDeleteCount = m.rawDelete;
-    gDelimiterToSend = delimiterToSend;
-    gPasteText = gSnips[m.index].text;
-
-    ClearBuffer();
-    PostMessageW(gWnd, WM_DO_EXPAND, 0, 0);
-}
-
 static LRESULT CALLBACK HookProc(int code, WPARAM wp, LPARAM lp) {
     if (code < 0 || !gEnabled || gExpanding) return CallNextHookEx(gHook, code, wp, lp);
     if (wp != WM_KEYDOWN && wp != WM_SYSKEYDOWN) return CallNextHookEx(gHook, code, wp, lp);
@@ -713,7 +648,13 @@ static LRESULT CALLBACK HookProc(int code, WPARAM wp, LPARAM lp) {
         Match m = FindMatch();
 
         if (m.index >= 0) {
-            StartExpansion(m, 0);
+            gTarget = GetForegroundWindow();
+            gDeleteCount = m.rawDelete;
+            gDelimiterToSend = 0;
+            gPasteText = gSnips[m.index].text;
+
+            ClearBuffer();
+            PostMessageW(gWnd, WM_DO_EXPAND, 0, 0);
             return 1;
         }
     }
@@ -726,19 +667,27 @@ static LRESULT CALLBACK HookProc(int code, WPARAM wp, LPARAM lp) {
             Match m = FindMatch();
 
             if (m.index >= 0) {
-                StartExpansion(m, delimVk);
+                gTarget = GetForegroundWindow();
+                gDeleteCount = m.rawDelete;
+                gDelimiterToSend = delimVk;
+                gPasteText = gSnips[m.index].text;
+
+                ClearBuffer();
+                PostMessageW(gWnd, WM_DO_EXPAND, 0, 0);
                 return 1;
             }
 
-            // Keep delimiters in the buffer to support multi-word keywords.
+            // Important v20 fix:
+            // Do NOT clear the buffer on delimiter when no match exists.
+            // This supports long/multi-word keywords and large snippet sets.
             AddToBuffer(rawDelimiter);
             return CallNextHookEx(gHook, code, wp, lp);
         }
     }
 
     if (k->vkCode == VK_BACK) {
-        if (!gEvents.empty()) gEvents.pop_back();
-        RebuildNormBuffer();
+        if (!gRawBuffer.empty()) gRawBuffer.pop_back();
+        gNormBuffer = Normalize(gRawBuffer);
         return CallNextHookEx(gHook, code, wp, lp);
     }
 
@@ -763,7 +712,7 @@ static LRESULT CALLBACK HookProc(int code, WPARAM wp, LPARAM lp) {
 static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     switch (m) {
     case WM_CREATE:
-        CreateWindowW(L"STATIC", L"cmd Text Expander v21", WS_CHILD | WS_VISIBLE, 18, 14, 360, 28, h, 0, gInst, 0);
+        CreateWindowW(L"STATIC", L"cmd Text Expander v20", WS_CHILD | WS_VISIBLE, 18, 14, 360, 28, h, 0, gInst, 0);
         gCount = CreateWindowW(L"STATIC", L"Loaded snippets: 0", WS_CHILD | WS_VISIBLE, 18, 50, 360, 22, h, 0, gInst, 0);
         gStatus = CreateWindowW(L"STATIC", L"Running - keyword + Space or Ctrl + Space", WS_CHILD | WS_VISIBLE, 18, 78, 520, 22, h, 0, gInst, 0);
         CreateWindowW(L"BUTTON", L"Reload snippets", WS_CHILD | WS_VISIBLE, 18, 112, 140, 32, h, (HMENU)1, gInst, 0);
@@ -811,7 +760,7 @@ int WINAPI wWinMain(HINSTANCE h, HINSTANCE, PWSTR, int show) {
     wc.hInstance = h;
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     wc.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
-    wc.lpszClassName = L"cmdTextExpanderGuiV21";
+    wc.lpszClassName = L"cmdTextExpanderGuiV20";
 
     RegisterClassW(&wc);
 
