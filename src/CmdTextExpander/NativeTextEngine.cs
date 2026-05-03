@@ -40,7 +40,7 @@ public sealed class NativeTextEngine : IDisposable
             if (_hook == IntPtr.Zero) throw new InvalidOperationException("Failed to install keyboard hook.");
         }
         _enabled = true;
-        _status("Text expander enabled. Type a keyword and it expands immediately.");
+        _status("Enabled. Type a saved keyword to expand immediately.");
     }
 
     public void Stop()
@@ -90,50 +90,44 @@ public sealed class NativeTextEngine : IDisposable
 
         if (IsDelimiter(key))
         {
-            TryExpandExactBuffer();
+            var keyword = _buffer.ToString();
+            var match = _store.MatchKeyword(keyword);
             _buffer.Clear();
+            if (match is not null)
+            {
+                _ui.BeginInvoke(new Action(() => ReplaceAlreadyTypedText(keyword.Length, match.Text)));
+                return (IntPtr)1;
+            }
             return CallNextHookEx(_hook, nCode, wParam, lParam);
         }
 
-        var text = KeyToUnicode((uint)info.vkCode, info.scanCode);
-        if (!string.IsNullOrEmpty(text))
-        {
-            foreach (var ch in text)
-            {
-                if (!char.IsControl(ch))
-                {
-                    _buffer.Append(ch);
-                    if (_buffer.Length > 120) _buffer.Remove(0, _buffer.Length - 120);
-                }
-            }
+        var typedText = KeyToUnicode((uint)info.vkCode, info.scanCode);
+        if (string.IsNullOrEmpty(typedText))
+            return CallNextHookEx(_hook, nCode, wParam, lParam);
 
-            var match = FindImmediateMatch();
-            if (match is not null)
-            {
-                var keywordLength = match.Keyword.Length;
-                _buffer.Clear();
-                _ui.BeginInvoke(new Action(() => ReplaceKeyword(keywordLength, match.Text)));
-            }
+        var printable = new string(typedText.Where(ch => !char.IsControl(ch)).ToArray());
+        if (printable.Length == 0)
+            return CallNextHookEx(_hook, nCode, wParam, lParam);
+
+        var before = _buffer.ToString();
+        var candidate = before + printable;
+        var matchNow = FindImmediateMatch(candidate);
+        if (matchNow is not null)
+        {
+            var alreadyTypedChars = Math.Max(0, matchNow.Keyword.Length - printable.Length);
+            _buffer.Clear();
+            _ui.BeginInvoke(new Action(() => ReplaceAlreadyTypedText(alreadyTypedChars, matchNow.Text)));
+            return (IntPtr)1;
         }
 
+        _buffer.Append(printable);
+        if (_buffer.Length > 120) _buffer.Remove(0, _buffer.Length - 120);
         return CallNextHookEx(_hook, nCode, wParam, lParam);
     }
 
-    private void TryExpandExactBuffer()
+    private Snippet? FindImmediateMatch(string buffer)
     {
-        var keyword = _buffer.ToString();
-        if (string.IsNullOrWhiteSpace(keyword)) return;
-        var match = _store.MatchKeyword(keyword);
-        if (match is not null)
-        {
-            _ui.BeginInvoke(new Action(() => ReplaceKeyword(keyword.Length, match.Text)));
-        }
-    }
-
-    private Snippet? FindImmediateMatch()
-    {
-        if (_buffer.Length == 0) return null;
-        var buffer = _buffer.ToString();
+        if (string.IsNullOrEmpty(buffer)) return null;
 
         return _store.Snippets
             .Where(x => x.Enabled && !string.IsNullOrWhiteSpace(x.Keyword))
@@ -161,11 +155,12 @@ public sealed class NativeTextEngine : IDisposable
         return key == Keys.Space || key == Keys.Enter || key == Keys.Tab;
     }
 
-    private void ReplaceKeyword(int charsToDelete, string replacement)
+    private void ReplaceAlreadyTypedText(int charsToDelete, string replacement)
     {
         try
         {
             _internalPaste = true;
+            charsToDelete = Math.Max(0, charsToDelete);
             for (var i = 0; i < charsToDelete; i++) SendKeys.SendWait("{BACKSPACE}");
 
             var oldText = Clipboard.ContainsText() ? Clipboard.GetText() : null;
