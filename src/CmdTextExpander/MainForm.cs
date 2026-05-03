@@ -4,12 +4,19 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace CmdTextExpander;
 
 public sealed class MainForm : Form
 {
+    private const int HOTKEY_ID = 7135;
+    private const int WM_HOTKEY = 0x0312;
+    private const uint MOD_CONTROL = 0x0002;
+    private const uint VK_SPACE = 0x20;
+
     private readonly SnippetStore _store;
     private readonly NativeTextEngine _engine;
     private readonly BindingList<Snippet> _view = new();
@@ -61,12 +68,41 @@ public sealed class MainForm : Form
         RefreshGrid();
     }
 
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        if (RegisterHotKey(Handle, HOTKEY_ID, MOD_CONTROL, VK_SPACE))
+        {
+            SetStatus("Ready. Ctrl + Space opens quick canned picker.");
+        }
+        else
+        {
+            SetStatus("Ready. Ctrl + Space hotkey is already used by another app.");
+        }
+    }
+
+    protected override void OnHandleDestroyed(EventArgs e)
+    {
+        UnregisterHotKey(Handle, HOTKEY_ID);
+        base.OnHandleDestroyed(e);
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == WM_HOTKEY && m.WParam.ToInt32() == HOTKEY_ID)
+        {
+            ShowQuickPicker();
+            return;
+        }
+        base.WndProc(ref m);
+    }
+
     private NotifyIcon BuildTrayIcon()
     {
         var menu = new ContextMenuStrip();
         menu.Items.Add("Show", null, (_, _) => ShowFromTray());
-        menu.Items.Add("Enable Expander", null, (_, _) => _engine.Start());
-        menu.Items.Add("Disable Expander", null, (_, _) => _engine.Stop());
+        menu.Items.Add("Enable Expander", null, (_, _) => { _engine.Start(); RefreshGrid(); });
+        menu.Items.Add("Disable Expander", null, (_, _) => { _engine.Stop(); RefreshGrid(); });
         menu.Items.Add("Exit", null, (_, _) => Close());
 
         var icon = new NotifyIcon
@@ -121,11 +157,11 @@ public sealed class MainForm : Form
 
         var subtitle = new Label
         {
-            Text = "Beeftext-style canned responses. Type keyword then Space / Enter / Tab.",
+            Text = "Type keyword + Space, or press Ctrl + Space to open canned picker.",
             AutoSize = false,
             Left = 16,
             Top = 48,
-            Width = 640,
+            Width = 700,
             Height = 22,
             ForeColor = Muted,
             TextAlign = ContentAlignment.MiddleLeft
@@ -144,18 +180,24 @@ public sealed class MainForm : Form
         _disableButton.Click += (_, _) => { _engine.Stop(); RefreshGrid(); };
         header.Controls.Add(_disableButton);
 
+        var quickButton = new Button { Text = "Quick Picker" };
+        StyleButton(quickButton, Blue, Color.White);
+        quickButton.SetBounds(624, 18, 140, 38);
+        quickButton.Click += (_, _) => ShowQuickPicker();
+        header.Controls.Add(quickButton);
+
         var openData = new Button { Text = "Open Data Folder" };
         StyleButton(openData, Blue, Color.White);
-        openData.SetBounds(624, 18, 160, 38);
+        openData.SetBounds(776, 18, 160, 38);
         openData.Click += (_, _) => Process.Start("explorer.exe", AppContext.BaseDirectory);
         header.Controls.Add(openData);
 
         _status.Text = "Ready";
         _status.AutoSize = false;
-        _status.Left = 800;
-        _status.Top = 24;
-        _status.Width = 320;
-        _status.Height = 38;
+        _status.Left = 950;
+        _status.Top = 16;
+        _status.Width = 210;
+        _status.Height = 52;
         _status.ForeColor = Muted;
         _status.TextAlign = ContentAlignment.MiddleLeft;
         header.Controls.Add(_status);
@@ -326,7 +368,7 @@ public sealed class MainForm : Form
         var hint = new Label
         {
             Dock = DockStyle.Fill,
-            Text = "طريقة الاستخدام:\n1. اكتب Keyword مثل ;hi في الخانة الأولى.\n2. اكتب الرد الكامل في Snippet Text.\n3. اضغط Save.\n4. افتح Notepad أو Chrome واكتب الاختصار ثم Space / Enter / Tab.\n\nدبل كليك على أي سطر من المكتبة لتعديله.",
+            Text = "طريقة الاستخدام:\n1. اكتب Keyword مثل ;hi في الخانة الأولى.\n2. اكتب الرد الكامل في Snippet Text.\n3. اضغط Save.\n4. افتح Notepad أو Chrome واكتب الاختصار ثم Space / Enter / Tab.\n5. أو اضغط Ctrl + Space من أي مكان لفتح قائمة الكاندات.\n\nدبل كليك على أي سطر من المكتبة لتعديله.",
             ForeColor = Color.FromArgb(203, 213, 225),
             Padding = new Padding(0, 8, 0, 0),
             TextAlign = ContentAlignment.TopLeft
@@ -445,6 +487,51 @@ public sealed class MainForm : Form
         }
     }
 
+    private void ShowQuickPicker()
+    {
+        var targetWindow = GetForegroundWindow();
+        using var picker = new QuickPickerForm(_store.Snippets);
+        var result = picker.ShowDialog(this);
+        if (result == DialogResult.OK && picker.SelectedSnippet is not null)
+        {
+            PasteSnippetToTarget(targetWindow, picker.SelectedSnippet.Text);
+        }
+    }
+
+    private void PasteSnippetToTarget(IntPtr targetWindow, string text)
+    {
+        try
+        {
+            var oldText = Clipboard.ContainsText() ? Clipboard.GetText() : null;
+            Clipboard.SetText(text ?? string.Empty);
+
+            if (targetWindow != IntPtr.Zero && targetWindow != Handle)
+            {
+                SetForegroundWindow(targetWindow);
+                Thread.Sleep(120);
+            }
+
+            SendKeys.SendWait("^v");
+            SetStatus("Selected canned pasted.");
+
+            if (oldText is not null)
+            {
+                var timer = new System.Windows.Forms.Timer { Interval = 500 };
+                timer.Tick += (_, _) =>
+                {
+                    timer.Stop();
+                    timer.Dispose();
+                    try { Clipboard.SetText(oldText); } catch { }
+                };
+                timer.Start();
+            }
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Paste failed: " + ex.Message);
+        }
+    }
+
     private void SetStatus(string message)
     {
         if (InvokeRequired)
@@ -465,11 +552,8 @@ public sealed class MainForm : Form
     protected override void OnResize(EventArgs e)
     {
         base.OnResize(e);
-        if (WindowState == FormWindowState.Minimized)
-        {
-            Hide();
-            _tray.ShowBalloonTip(900, "cmd", "Text expander is still running in the tray.", ToolTipIcon.Info);
-        }
+        // Keep the main window visible when minimized. The tray icon remains available,
+        // but the app will not auto-hide anymore.
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
@@ -479,4 +563,16 @@ public sealed class MainForm : Form
         _engine.Dispose();
         base.OnFormClosing(e);
     }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
 }
