@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace CmdTextExpander;
@@ -12,6 +13,11 @@ public sealed class NativeTextEngine : IDisposable
     private const int WM_KEYDOWN = 0x0100;
     private const int WM_SYSKEYDOWN = 0x0104;
     private const int LLKHF_INJECTED = 0x10;
+    private const int INPUT_KEYBOARD = 1;
+    private const uint KEYEVENTF_KEYUP = 0x0002;
+    private const ushort VK_BACK = 0x08;
+    private const ushort VK_CONTROL = 0x11;
+    private const ushort VK_V = 0x56;
 
     private readonly Control _ui;
     private readonly SnippetStore _store;
@@ -40,6 +46,7 @@ public sealed class NativeTextEngine : IDisposable
             if (_hook == IntPtr.Zero) throw new InvalidOperationException("Failed to install keyboard hook.");
         }
         _enabled = true;
+        _buffer.Clear();
         _status("Enabled. Type a saved keyword to expand immediately.");
     }
 
@@ -74,6 +81,7 @@ public sealed class NativeTextEngine : IDisposable
         if (IsOurOwnWindowActive())
             return CallNextHookEx(_hook, nCode, wParam, lParam);
 
+        var targetWindow = GetForegroundWindow();
         var key = (Keys)info.vkCode;
 
         if (key == Keys.Back)
@@ -95,7 +103,7 @@ public sealed class NativeTextEngine : IDisposable
             _buffer.Clear();
             if (match is not null)
             {
-                _ui.BeginInvoke(new Action(() => ReplaceAlreadyTypedText(keyword.Length, match.Text)));
+                _ui.BeginInvoke(new Action(() => ReplaceInTargetWindow(targetWindow, keyword.Length, match.Text)));
                 return (IntPtr)1;
             }
             return CallNextHookEx(_hook, nCode, wParam, lParam);
@@ -116,7 +124,7 @@ public sealed class NativeTextEngine : IDisposable
         {
             var alreadyTypedChars = Math.Max(0, matchNow.Keyword.Length - printable.Length);
             _buffer.Clear();
-            _ui.BeginInvoke(new Action(() => ReplaceAlreadyTypedText(alreadyTypedChars, matchNow.Text)));
+            _ui.BeginInvoke(new Action(() => ReplaceInTargetWindow(targetWindow, alreadyTypedChars, matchNow.Text)));
             return (IntPtr)1;
         }
 
@@ -155,22 +163,31 @@ public sealed class NativeTextEngine : IDisposable
         return key == Keys.Space || key == Keys.Enter || key == Keys.Tab;
     }
 
-    private void ReplaceAlreadyTypedText(int charsToDelete, string replacement)
+    private void ReplaceInTargetWindow(IntPtr targetWindow, int charsToDelete, string replacement)
     {
         try
         {
             _internalPaste = true;
             charsToDelete = Math.Max(0, charsToDelete);
-            for (var i = 0; i < charsToDelete; i++) SendKeys.SendWait("{BACKSPACE}");
+
+            if (targetWindow != IntPtr.Zero && targetWindow != _ui.Handle)
+            {
+                SetForegroundWindow(targetWindow);
+                Thread.Sleep(30);
+            }
+
+            if (charsToDelete > 0)
+                SendBackspaces(charsToDelete);
 
             var oldText = Clipboard.ContainsText() ? Clipboard.GetText() : null;
             Clipboard.SetText(replacement ?? string.Empty);
-            SendKeys.SendWait("^v");
+            Thread.Sleep(20);
+            SendCtrlV();
             _status("Expanded snippet.");
 
             if (oldText is not null)
             {
-                var timer = new System.Windows.Forms.Timer { Interval = 400 };
+                var timer = new System.Windows.Forms.Timer { Interval = 700 };
                 timer.Tick += (_, _) =>
                 {
                     timer.Stop();
@@ -188,6 +205,49 @@ public sealed class NativeTextEngine : IDisposable
         {
             _internalPaste = false;
         }
+    }
+
+    private static void SendBackspaces(int count)
+    {
+        if (count <= 0) return;
+        var inputs = new INPUT[count * 2];
+        for (var i = 0; i < count; i++)
+        {
+            inputs[i * 2] = KeyInput(VK_BACK, false);
+            inputs[i * 2 + 1] = KeyInput(VK_BACK, true);
+        }
+        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+    }
+
+    private static void SendCtrlV()
+    {
+        var inputs = new[]
+        {
+            KeyInput(VK_CONTROL, false),
+            KeyInput(VK_V, false),
+            KeyInput(VK_V, true),
+            KeyInput(VK_CONTROL, true)
+        };
+        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+    }
+
+    private static INPUT KeyInput(ushort vk, bool keyUp)
+    {
+        return new INPUT
+        {
+            type = INPUT_KEYBOARD,
+            u = new InputUnion
+            {
+                ki = new KEYBDINPUT
+                {
+                    wVk = vk,
+                    wScan = 0,
+                    dwFlags = keyUp ? KEYEVENTF_KEYUP : 0,
+                    time = 0,
+                    dwExtraInfo = UIntPtr.Zero
+                }
+            }
+        };
     }
 
     private static string KeyToUnicode(uint vkCode, uint scanCode)
@@ -211,6 +271,29 @@ public sealed class NativeTextEngine : IDisposable
         public IntPtr dwExtraInfo;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct INPUT
+    {
+        public int type;
+        public InputUnion u;
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    private struct InputUnion
+    {
+        [FieldOffset(0)] public KEYBDINPUT ki;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KEYBDINPUT
+    {
+        public ushort wVk;
+        public ushort wScan;
+        public uint dwFlags;
+        public uint time;
+        public UIntPtr dwExtraInfo;
+    }
+
     [DllImport("user32.dll", SetLastError = true)]
     private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
 
@@ -232,4 +315,10 @@ public sealed class NativeTextEngine : IDisposable
 
     [DllImport("user32.dll")]
     private static extern bool IsChild(IntPtr hWndParent, IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
 }
