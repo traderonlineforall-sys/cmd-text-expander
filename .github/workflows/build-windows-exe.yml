@@ -35,13 +35,14 @@ jobs:
           Copy-Item "publish\cmdTextExpander.exe" "artifact\cmdTextExpander.exe"
           Copy-Item "README.md" "artifact\README.md"
           Copy-Item "snippets.json" "artifact\snippets.json"
-          @'
-cmd Text Expander
-
-Run cmdTextExpander.exe.
-This release intentionally does not include a cmd.exe alias because that filename can look suspicious to Windows protection.
-For strongest Windows trust, sign cmdTextExpander.exe with a real code signing certificate.
-'@ | Set-Content -Path "artifact\README_RUN_FIRST.txt" -Encoding UTF8
+          $readme = @(
+            "cmd Text Expander",
+            "",
+            "Run cmdTextExpander.exe.",
+            "This release intentionally does not include a cmd.exe alias because that filename can look suspicious to Windows protection.",
+            "For strongest Windows trust, sign cmdTextExpander.exe with a real code signing certificate."
+          )
+          $readme | Set-Content -Path "artifact\README_RUN_FIRST.txt" -Encoding UTF8
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
