@@ -35,26 +35,9 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path artifact | Out-Null
           Copy-Item "publish\cmd.exe" "artifact\cmd.exe"
-          if (Test-Path "publish\*.dll") { Copy-Item "publish\*.dll" "artifact" -ErrorAction SilentlyContinue }
           Copy-Item "README.md" "artifact\README.md"
           Copy-Item "build.bat" "artifact\build.bat"
-          Copy-Item "src" "artifact\src" -Recurse
-          @'
-[
-  {
-    "keyword": ";hi",
-    "text": "أهلاً بحضرتك، معاك إسلام من خدمة عملاء WE. ازاي أقدر أساعد حضرتك؟",
-    "group": "Default",
-    "enabled": true
-  },
-  {
-    "keyword": ";thanks",
-    "text": "تحت أمرك يا فندم، سعدت بمساعدة حضرتك ونتمنالك يوم سعيد.",
-    "group": "Default",
-    "enabled": true
-  }
-]
-'@ | Set-Content -Path "artifact\snippets.json" -Encoding UTF8
+          Copy-Item "snippets.json" "artifact\snippets.json"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
