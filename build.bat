@@ -8,10 +8,18 @@ if errorlevel 1 (
   echo MSVC cl.exe was not found. Run inside Developer Command Prompt or GitHub Actions windows-latest.
   exit /b 1
 )
-cl /nologo /std:c++17 /O2 /EHsc /utf-8 /DUNICODE /D_UNICODE src\cmd.cpp /link /SUBSYSTEM:WINDOWS /OUT:publish\cmd.exe user32.lib shell32.lib comdlg32.lib gdi32.lib
-if errorlevel 1 exit /b 1
-if not exist publish\cmd.exe (
-  echo Build failed: publish\cmd.exe was not created.
+where rc >nul 2>nul
+if errorlevel 1 (
+  echo Windows resource compiler rc.exe was not found.
   exit /b 1
 )
-echo Build complete: publish\cmd.exe
+rc /nologo /fo publish\app.res src\app.rc
+if errorlevel 1 exit /b 1
+cl /nologo /std:c++17 /O2 /EHsc /utf-8 /DUNICODE /D_UNICODE src\cmd.cpp publish\app.res /link /SUBSYSTEM:WINDOWS /OUT:publish\cmdTextExpander.exe user32.lib shell32.lib comdlg32.lib gdi32.lib
+if errorlevel 1 exit /b 1
+if not exist publish\cmdTextExpander.exe (
+  echo Build failed: publish\cmdTextExpander.exe was not created.
+  exit /b 1
+)
+copy /y publish\cmdTextExpander.exe publish\cmd.exe >nul
+echo Build complete: publish\cmdTextExpander.exe and publish\cmd.exe
