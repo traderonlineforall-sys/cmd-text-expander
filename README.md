@@ -1,28 +1,44 @@
-# cmd v1.9 Final Reliability
+# cmd v20 Final Smart Engine
 
-نسخة نهائية محسنة من أداة Text Expander بنظام Windows GUI وليست شاشة CMD سوداء.
+Windows native text expander GUI.
 
-## أهم الإصلاحات
+## Main fixes in v20
 
-- الوضع الافتراضي أصبح Automatic: اكتب الكيورد ثم Space / Enter / Tab.
-- Ctrl + Space ما زال متاحًا كتشغيل يدوي.
-- إصلاح مشكلة الكيورد مثل `2.` حتى لا يترك الرقم قبل الكاند.
-- Matching engine مفهرس للملفات الكبيرة جدًا.
-- Longest match first: لو عندك `ا` و `اب` سيختار `اب` عند كتابتها.
-- دعم أفضل للعربي بدون الاعتماد على حروف عربية مباشرة داخل السورس.
-- دعم Beeftext `.btbackup` و JSON عن طريق زر Import داخل البرنامج.
-- إعادة كتابة delimiter بعد التوسيع، مثل المسافة، حتى يظل التدفق طبيعيًا.
+- Uses a reverse trie matching engine for large snippet files.
+- Fixes Arabic multi-letter keywords by using the active foreground keyboard layout in `ToUnicodeEx`.
+- Forces current key state before `ToUnicodeEx`, which improves Arabic character capture in low-level hooks.
+- Supports Arabic normalization:
+  - alif variants normalize to ا
+  - ى normalizes to ي
+  - ة normalizes to ه
+  - ؤ normalizes to و
+  - ئ normalizes to ي
+  - Arabic/Persian digits normalize to 0-9
+  - tashkeel, tatweel, zero-width marks are ignored
+- Fixes cases such as keyword `2.` leaving `2` by using at least the original keyword raw length when deleting.
+- Does not clear the buffer after spaces when there is no match, so long/multi-word keywords can work.
+- GUI app, not a black console.
 
-## طريقة الاستخدام
+## How to use
 
-1. شغل `cmd.exe`.
-2. استورد ملف Beeftext أو استخدم `snippets.json`.
-3. اكتب الكيورد ثم Space.
-4. أو اكتب الكيورد ثم Ctrl + Space.
+1. Put `snippets.json` next to `cmd.exe`.
+2. Run `cmd.exe`.
+3. Type a keyword, then press Space.
+4. Or type a keyword, then press Ctrl + Space.
 
-## اختبار سريع
+## JSON format
 
-- Keyword: `2.` -> Text: `TEST 2 DOT`
-- Keyword: `اب` -> Text: `TEST AR`
+```json
+[
+  { "keyword": "2.", "text": "DOT TEST" },
+  { "keyword": "اب", "text": "ARABIC TEST" }
+]
+```
 
-اكتب الكيورد واضغط Space. يجب أن يتم مسح الكيورد بالكامل ووضع الكاند مكانه.
+## Build
+
+GitHub Actions will build `publish\cmd.exe`.
+
+Artifact name:
+
+`cmd_v20_final_smart_engine_release`

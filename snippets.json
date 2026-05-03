@@ -1,14 +1,14 @@
 [
   {
-    "keyword": ";hi",
-    "group": "Default",
-    "text": "أهلاً بحضرتك، معاك إسلام من خدمة عملاء WE. ازاي أقدر أساعد حضرتك؟",
-    "enabled": true
+    "keyword": "2.",
+    "text": "DOT TEST"
   },
   {
-    "keyword": ";thanks",
-    "group": "Default",
-    "text": "تحت أمرك يا فندم، سعدت بمساعدة حضرتك ونتمنالك يوم سعيد.",
-    "enabled": true
+    "keyword": "اب",
+    "text": "ARABIC TEST"
+  },
+  {
+    "keyword": ";hi",
+    "text": "Hello"
   }
 ]
