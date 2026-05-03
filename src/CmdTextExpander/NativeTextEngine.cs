@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
@@ -39,7 +40,7 @@ public sealed class NativeTextEngine : IDisposable
             if (_hook == IntPtr.Zero) throw new InvalidOperationException("Failed to install keyboard hook.");
         }
         _enabled = true;
-        _status("Text expander enabled.");
+        _status("Text expander enabled. Type a keyword and it expands immediately.");
     }
 
     public void Stop()
@@ -70,6 +71,9 @@ public sealed class NativeTextEngine : IDisposable
         if ((info.flags & LLKHF_INJECTED) != 0)
             return CallNextHookEx(_hook, nCode, wParam, lParam);
 
+        if (IsOurOwnWindowActive())
+            return CallNextHookEx(_hook, nCode, wParam, lParam);
+
         var key = (Keys)info.vkCode;
 
         if (key == Keys.Back)
@@ -78,7 +82,7 @@ public sealed class NativeTextEngine : IDisposable
             return CallNextHookEx(_hook, nCode, wParam, lParam);
         }
 
-        if (key == Keys.Escape || key == Keys.Left || key == Keys.Right || key == Keys.Up || key == Keys.Down || key == Keys.Home || key == Keys.End)
+        if (key == Keys.Escape || key == Keys.Left || key == Keys.Right || key == Keys.Up || key == Keys.Down || key == Keys.Home || key == Keys.End || key == Keys.Delete)
         {
             _buffer.Clear();
             return CallNextHookEx(_hook, nCode, wParam, lParam);
@@ -86,17 +90,8 @@ public sealed class NativeTextEngine : IDisposable
 
         if (IsDelimiter(key))
         {
-            var keyword = _buffer.ToString();
+            TryExpandExactBuffer();
             _buffer.Clear();
-            if (!string.IsNullOrWhiteSpace(keyword))
-            {
-                var match = _store.MatchKeyword(keyword);
-                if (match is not null)
-                {
-                    _ui.BeginInvoke(new Action(() => ReplaceKeyword(keyword.Length, match.Text)));
-                    return (IntPtr)1;
-                }
-            }
             return CallNextHookEx(_hook, nCode, wParam, lParam);
         }
 
@@ -108,12 +103,57 @@ public sealed class NativeTextEngine : IDisposable
                 if (!char.IsControl(ch))
                 {
                     _buffer.Append(ch);
-                    if (_buffer.Length > 80) _buffer.Remove(0, _buffer.Length - 80);
+                    if (_buffer.Length > 120) _buffer.Remove(0, _buffer.Length - 120);
                 }
+            }
+
+            var match = FindImmediateMatch();
+            if (match is not null)
+            {
+                var keywordLength = match.Keyword.Length;
+                _buffer.Clear();
+                _ui.BeginInvoke(new Action(() => ReplaceKeyword(keywordLength, match.Text)));
             }
         }
 
         return CallNextHookEx(_hook, nCode, wParam, lParam);
+    }
+
+    private void TryExpandExactBuffer()
+    {
+        var keyword = _buffer.ToString();
+        if (string.IsNullOrWhiteSpace(keyword)) return;
+        var match = _store.MatchKeyword(keyword);
+        if (match is not null)
+        {
+            _ui.BeginInvoke(new Action(() => ReplaceKeyword(keyword.Length, match.Text)));
+        }
+    }
+
+    private Snippet? FindImmediateMatch()
+    {
+        if (_buffer.Length == 0) return null;
+        var buffer = _buffer.ToString();
+
+        return _store.Snippets
+            .Where(x => x.Enabled && !string.IsNullOrWhiteSpace(x.Keyword))
+            .OrderByDescending(x => x.Keyword.Length)
+            .FirstOrDefault(x => buffer.EndsWith(x.Keyword, StringComparison.Ordinal));
+    }
+
+    private bool IsOurOwnWindowActive()
+    {
+        try
+        {
+            var fg = GetForegroundWindow();
+            if (fg == IntPtr.Zero) return false;
+            if (fg == _ui.Handle) return true;
+            return IsChild(_ui.Handle, fg);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool IsDelimiter(Keys key)
@@ -191,4 +231,10 @@ public sealed class NativeTextEngine : IDisposable
 
     [DllImport("user32.dll")]
     private static extern int ToUnicode(uint wVirtKey, uint wScanCode, byte[] lpKeyState, [Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pwszBuff, int cchBuff, uint wFlags);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern bool IsChild(IntPtr hWndParent, IntPtr hWnd);
 }
