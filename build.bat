@@ -15,7 +15,7 @@ if errorlevel 1 (
 )
 rc /nologo /fo publish\app.res src\app.rc
 if errorlevel 1 exit /b 1
-cl /nologo /std:c++17 /O2 /EHsc /utf-8 /FI src\forward.h /DUNICODE /D_UNICODE src\cmd.cpp publish\app.res /link /SUBSYSTEM:WINDOWS /OUT:publish\cmdTextExpander.exe user32.lib shell32.lib comdlg32.lib gdi32.lib
+cl /nologo /std:c++17 /O2 /EHsc /utf-8 /FI"src\forward.h" /DUNICODE /D_UNICODE src\cmd.cpp publish\app.res /link /SUBSYSTEM:WINDOWS /OUT:publish\cmdTextExpander.exe user32.lib shell32.lib comdlg32.lib gdi32.lib
 if errorlevel 1 exit /b 1
 if not exist publish\cmdTextExpander.exe (
   echo Build failed: publish\cmdTextExpander.exe was not created.
