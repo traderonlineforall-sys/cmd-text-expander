@@ -39,6 +39,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cmd_v16_reliability_release
+          name: cmd_v18_enterprise_reliability_release
           path: artifact/*
           if-no-files-found: error

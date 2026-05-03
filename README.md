@@ -1,32 +1,37 @@
-# cmd v1.6 Reliability Upgrade
+# cmd v1.8 Enterprise Reliability
 
-## What changed
+Portable Windows text expander.
 
-- Best suffix matching instead of exact whole-buffer matching.
-- One-letter and multi-letter shortcuts work more reliably.
-- Shortcuts can be Arabic, English, numbers, symbols, or mixed.
-- Normalizes invisible characters and Arabic/Persian digits.
-- Decodes JSON unicode escapes such as `\u0627`.
-- Ctrl + Space remains the recommended stable mode.
+## Critical fixes
 
-## Usage
+- Fixes `2.` leaving `2` after expansion by releasing Ctrl/Alt/Shift before deletion.
+- Indexed keyword engine for large snippet files.
+- Longest-match-first behavior: if you have `ا` and `اب`, typing `اب` expands the longer keyword.
+- Strong Arabic normalization:
+  - أ / إ / آ / ٱ => ا
+  - ى => ي
+  - ؤ => و
+  - ئ => ي
+  - ة => ه
+  - removes tashkeel / tatweel / zero-width marks
+- Arabic/Persian digits normalize to English digits.
+- Arabic punctuation variants normalize for matching.
+- Duplicate keyword handling updates the existing keyword instead of creating conflicts.
 
-1. Run `cmd.exe`.
-2. Import your Beeftext backup or add snippets.
-3. Use `Ctrl + Space` mode.
-4. Type the keyword, then press `Ctrl + Space`.
+## Recommended mode
+
+Use **Ctrl + Space** mode for best reliability.
 
 Examples:
 
-- `ا`
-- `ab`
-- `55`
-- `3.`
-- `فى البداية`
-- `;hi`
+- keyword `2.` then `Ctrl + Space`
+- keyword `اب` then `Ctrl + Space`
+- keyword `فى البداية` then `Ctrl + Space`
 
-## Modes
+## Import
 
-- Ctrl + Space: most reliable for Notepad, Chrome, WhatsApp Web, Outlook.
-- Automatic: keyword then Space / Enter / Tab.
-- Custom trigger: keyword + your custom text, e.g. `;hi؛`.
+Supports:
+
+- Beeftext `.btbackup`
+- `.json`
+- `.csv`

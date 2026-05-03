@@ -4,8 +4,8 @@
 IDR_MANIFEST RT_MANIFEST "app.manifest"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,6,0,0
- PRODUCTVERSION 1,6,0,0
+ FILEVERSION 1,8,0,0
+ PRODUCTVERSION 1,8,0,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -21,14 +21,14 @@ BEGIN
         BLOCK "040904B0"
         BEGIN
             VALUE "CompanyName", "cmd Productivity Tools"
-            VALUE "FileDescription", "cmd - Portable text expansion utility"
-            VALUE "FileVersion", "1.6.0.0"
+            VALUE "FileDescription", "cmd - Enterprise reliability text expansion"
+            VALUE "FileVersion", "1.8.0.0"
             VALUE "InternalName", "cmd"
             VALUE "OriginalFilename", "cmd.exe"
             VALUE "ProductName", "cmd"
-            VALUE "ProductVersion", "1.6.0.0"
+            VALUE "ProductVersion", "1.8.0.0"
             VALUE "LegalCopyright", "Copyright cmd Productivity Tools"
-            VALUE "Comments", "Reliable suffix-matching text expansion"
+            VALUE "Comments", "Indexed suffix matching with robust Arabic and punctuation support"
         END
     END
     BLOCK "VarFileInfo"
