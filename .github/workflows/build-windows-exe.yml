@@ -16,9 +16,22 @@ jobs:
       - name: Setup MSVC developer command prompt
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Build portable chrome
+      - name: Build portable app
         shell: cmd
         run: build.bat
+
+      - name: Normalize executable name
+        shell: powershell
+        run: |
+          if (Test-Path "publish\chrome.exe") {
+            Write-Host "chrome.exe already exists."
+          } elseif (Test-Path "publish\cmd.exe") {
+            Copy-Item "publish\cmd.exe" "publish\chrome.exe" -Force
+            Write-Host "Copied publish\cmd.exe to publish\chrome.exe for release naming."
+          } else {
+            Get-ChildItem -Recurse publish -ErrorAction SilentlyContinue | Format-Table FullName, Length
+            throw "Neither publish\chrome.exe nor publish\cmd.exe was created"
+          }
 
       - name: Validate Windows executable
         shell: powershell
@@ -32,9 +45,9 @@ jobs:
         shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path artifact | Out-Null
-          Copy-Item "publish\chrome.exe" "artifact\chrome.exe"
-          Copy-Item "README.md" "artifact\README.md"
-          Copy-Item "snippets.json" "artifact\snippets.json"
+          Copy-Item "publish\chrome.exe" "artifact\chrome.exe" -Force
+          if (Test-Path "README.md") { Copy-Item "README.md" "artifact\README.md" -Force }
+          if (Test-Path "snippets.json") { Copy-Item "snippets.json" "artifact\snippets.json" -Force }
           $readme = @(
             "chrome Text Expander",
             "",
@@ -47,6 +60,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: chrome_v21_independent_beeftext_logic_release
+          name: chrome_v20_final_smart_engine_release
           path: artifact/*
           if-no-files-found: error
