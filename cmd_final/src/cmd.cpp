@@ -9,20 +9,11 @@
 // after pasting the replacement.  The code is portable across Windows
 // versions and can be compiled with MSVC.
 
-// Prevent Windows headers from defining min/max macros that conflict with std::min/std::max.
-// Define NOMINMAX before including Windows headers, then undefine any existing min/max macros.
 #ifndef NOMINMAX
 #define NOMINMAX 1
 #endif
 #include <windows.h>
 #include <winuser.h>
-// Undefine the min and max macros in case they slipped through from other includes.
-#ifdef min
-#undef min
-#endif
-#ifdef max
-#undef max
-#endif
 #include <string>
 #include <unordered_map>
 #include <vector>
