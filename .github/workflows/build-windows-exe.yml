@@ -1,4 +1,4 @@
-name: Build chrome
+name: Build cmd
 
 on:
   push:
@@ -16,50 +16,43 @@ jobs:
       - name: Setup MSVC developer command prompt
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Build portable app
+      - name: Build accepted cmd app
         shell: cmd
         run: build.bat
 
-      - name: Normalize executable name
+      - name: Validate cmd executable
         shell: powershell
         run: |
-          if (Test-Path "publish\chrome.exe") {
-            Write-Host "chrome.exe already exists."
-          } elseif (Test-Path "publish\cmd.exe") {
-            Copy-Item "publish\cmd.exe" "publish\chrome.exe" -Force
-            Write-Host "Copied publish\cmd.exe to publish\chrome.exe for release naming."
-          } else {
-            Get-ChildItem -Recurse publish -ErrorAction SilentlyContinue | Format-Table FullName, Length
-            throw "Neither publish\chrome.exe nor publish\cmd.exe was created"
-          }
-
-      - name: Validate Windows executable
-        shell: powershell
-        run: |
-          if (!(Test-Path "publish\chrome.exe")) { throw "publish\chrome.exe was not created" }
-          $bytes = [System.IO.File]::ReadAllBytes("publish\chrome.exe")
+          if (!(Test-Path "publish\cmd.exe")) { throw "publish\cmd.exe was not created" }
+          $bytes = [System.IO.File]::ReadAllBytes("publish\cmd.exe")
+          if ($bytes.Length -lt 2) { throw "publish\cmd.exe is empty or corrupt" }
           if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw "Not a Windows EXE: missing MZ header" }
-          Write-Host "Valid Windows EXE MZ header found"
+          $hash = Get-FileHash "publish\cmd.exe" -Algorithm SHA256
+          Write-Host "Valid Windows EXE found: publish\cmd.exe"
+          Write-Host "SHA256: $($hash.Hash)"
+          $hash.Hash | Set-Content -Path "publish\cmd.exe.sha256" -Encoding ASCII
 
       - name: Prepare artifact
         shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path artifact | Out-Null
-          Copy-Item "publish\chrome.exe" "artifact\chrome.exe" -Force
-          if (Test-Path "README.md") { Copy-Item "README.md" "artifact\README.md" -Force }
+          Copy-Item "publish\cmd.exe" "artifact\cmd.exe" -Force
+          Copy-Item "publish\cmd.exe.sha256" "artifact\cmd.exe.sha256" -Force
           if (Test-Path "snippets.json") { Copy-Item "snippets.json" "artifact\snippets.json" -Force }
+          if (Test-Path "README.md") { Copy-Item "README.md" "artifact\README.md" -Force }
           $readme = @(
-            "chrome Text Expander",
+            "cmd Text Expander - accepted build",
             "",
-            "Run chrome.exe.",
-            "Use keyword + Space / Enter / Tab, or Ctrl + Space.",
-            "Keep snippets.json next to chrome.exe."
+            "Run cmd.exe.",
+            "Keep snippets.json next to cmd.exe.",
+            "Automatic mode expands with keyword + Space / Enter / Tab.",
+            "Manual mode expands with Ctrl + Space."
           )
           $readme | Set-Content -Path "artifact\README_RUN_FIRST.txt" -Encoding UTF8
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: chrome_v20_final_smart_engine_release
+          name: cmd_final_release
           path: artifact/*
           if-no-files-found: error
