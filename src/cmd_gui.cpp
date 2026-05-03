@@ -11,6 +11,8 @@
 #endif
 
 #include <algorithm>
+#include <cwctype>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -27,28 +29,33 @@ static HINSTANCE gInst{};
 static HWND gWnd{}, gStatus{}, gCount{}, gList{};
 static HHOOK gHook{};
 static bool gEnabled = true;
+static bool gExpanding = false;
+
 static std::vector<Snippet> gSnips;
 static std::unordered_map<std::wstring, int> gIndex;
 static std::vector<size_t> gLengths;
 static std::wstring gRawBuffer, gNormBuffer;
-static size_t gMaxRaw = 512;
+static const size_t MAX_RAW_BUFFER = 512;
 
 static const UINT WM_DO_EXPAND = WM_APP + 10;
 static HWND gTarget{};
 static int gDeleteCount = 0;
+static WORD gDelimiterToSend = 0;
 static std::wstring gPasteText;
 
 static std::wstring Utf8ToWide(const std::string& s) {
     if (s.empty()) return L"";
     int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s.data(), (int)s.size(), nullptr, 0);
     UINT cp = CP_UTF8;
+    DWORD flags = MB_ERR_INVALID_CHARS;
     if (n <= 0) {
         cp = CP_ACP;
-        n = MultiByteToWideChar(cp, 0, s.data(), (int)s.size(), nullptr, 0);
+        flags = 0;
+        n = MultiByteToWideChar(cp, flags, s.data(), (int)s.size(), nullptr, 0);
     }
     if (n <= 0) return L"";
     std::wstring out(n, 0);
-    MultiByteToWideChar(cp, cp == CP_UTF8 ? MB_ERR_INVALID_CHARS : 0, s.data(), (int)s.size(), &out[0], n);
+    MultiByteToWideChar(cp, flags, s.data(), (int)s.size(), &out[0], n);
     return out;
 }
 
@@ -77,17 +84,20 @@ static std::wstring Trim(std::wstring s) {
 
 static wchar_t NormChar(wchar_t c) {
     if (c == 0xFEFF || c == 0x200B || c == 0x200C || c == 0x200D || c == 0x200E || c == 0x200F) return 0;
-    if (c == 0x0640 || c == 0x0670 || (c >= 0x064B && c <= 0x065F)) return 0;
+    if (c == 0x0640 || c == 0x0670 || (c >= 0x064B && c <= 0x065F) || (c >= 0x0610 && c <= 0x061A)) return 0;
     if (c >= 0x0660 && c <= 0x0669) return L'0' + (c - 0x0660);
     if (c >= 0x06F0 && c <= 0x06F9) return L'0' + (c - 0x06F0);
-    if (c == L'أ' || c == L'إ' || c == L'آ' || c == L'ٱ') return L'ا';
-    if (c == L'ى') return L'ي';
-    if (c == L'ؤ') return L'و';
-    if (c == L'ئ') return L'ي';
-    if (c == L'ة') return L'ه';
-    if (c == L'٫') return L'.';
-    if (c == L'٬') return L',';
-    if (c == L'؛') return L';';
+
+    // Arabic normalization without source-file Arabic character literals.
+    if (c == 0x0622 || c == 0x0623 || c == 0x0625 || c == 0x0671) return 0x0627; // alif variants -> alif
+    if (c == 0x0649) return 0x064A; // alef maksura -> ya
+    if (c == 0x0624) return 0x0648; // waw hamza -> waw
+    if (c == 0x0626) return 0x064A; // ya hamza -> ya
+    if (c == 0x0629) return 0x0647; // ta marbuta -> ha
+    if (c == 0x066B) return L'.';
+    if (c == 0x066C) return L',';
+    if (c == 0x061B) return L';';
+
     return (wchar_t)towlower(c);
 }
 
@@ -117,7 +127,7 @@ static std::wstring JsonUnescape(const std::wstring& s) {
             else if (n == L'r') out.push_back(L'\r');
             else if (n == L't') out.push_back(L'\t');
             else if (n == L'u' && i + 4 < s.size()) {
-                int a = Hex(s[i+1]), b = Hex(s[i+2]), c = Hex(s[i+3]), d = Hex(s[i+4]);
+                int a = Hex(s[i + 1]), b = Hex(s[i + 2]), c = Hex(s[i + 3]), d = Hex(s[i + 4]);
                 if (a >= 0 && b >= 0 && c >= 0 && d >= 0) {
                     out.push_back((wchar_t)((a << 12) | (b << 8) | (c << 4) | d));
                     i += 4;
@@ -130,10 +140,17 @@ static std::wstring JsonUnescape(const std::wstring& s) {
 
 static std::vector<std::wstring> Objects(const std::wstring& j) {
     std::vector<std::wstring> out;
-    int depth = 0; bool in = false, esc = false; size_t start = 0;
+    int depth = 0;
+    bool in = false, esc = false;
+    size_t start = 0;
     for (size_t i = 0; i < j.size(); ++i) {
         wchar_t c = j[i];
-        if (in) { if (esc) esc = false; else if (c == L'\\') esc = true; else if (c == L'"') in = false; continue; }
+        if (in) {
+            if (esc) esc = false;
+            else if (c == L'\\') esc = true;
+            else if (c == L'"') in = false;
+            continue;
+        }
         if (c == L'"') { in = true; continue; }
         if (c == L'{') { if (depth++ == 0) start = i; }
         else if (c == L'}') { if (depth > 0 && --depth == 0) out.push_back(j.substr(start, i - start + 1)); }
@@ -150,7 +167,8 @@ static bool GetJsonString(const std::wstring& obj, const std::vector<std::wstrin
         p = obj.find(L'"', p + 1);
         if (p == std::wstring::npos) continue;
         ++p;
-        std::wstring raw; bool esc = false;
+        std::wstring raw;
+        bool esc = false;
         for (; p < obj.size(); ++p) {
             wchar_t c = obj[p];
             if (esc) { raw.push_back(L'\\'); raw.push_back(c); esc = false; continue; }
@@ -191,7 +209,7 @@ static void LoadSnippets() {
     }
     if (gSnips.empty()) {
         gSnips.push_back({L";hi", Normalize(L";hi"), L"Hello"});
-        gSnips.push_back({L"اب", Normalize(L"اب"), L"TEST ARABIC"});
+        gSnips.push_back({L"ab", Normalize(L"ab"), L"TEST ARABIC KEY"});
         gSnips.push_back({L"2.", Normalize(L"2."), L"TEST 2 DOT"});
     }
     BuildIndex();
@@ -207,6 +225,7 @@ static Match FindMatch() {
         std::wstring suffix = gNormBuffer.substr(gNormBuffer.size() - len);
         auto it = gIndex.find(suffix);
         if (it == gIndex.end()) continue;
+
         std::wstring rebuilt;
         int del = 0;
         for (int p = (int)gRawBuffer.size() - 1; p >= 0; --p) {
@@ -227,26 +246,40 @@ static void RefreshUi() {
     if (gCount) SetWindowTextW(gCount, (L"Loaded snippets: " + std::to_wstring(gSnips.size())).c_str());
     if (gList) {
         SendMessageW(gList, LB_RESETCONTENT, 0, 0);
-        int max = (int)min<size_t>(gSnips.size(), 200);
-        for (int i = 0; i < max; ++i) SendMessageW(gList, LB_ADDSTRING, 0, (LPARAM)gSnips[i].keyword.c_str());
+        int count = (int)std::min<size_t>(gSnips.size(), 200);
+        for (int i = 0; i < count; ++i) SendMessageW(gList, LB_ADDSTRING, 0, (LPARAM)gSnips[i].keyword.c_str());
     }
 }
 
 static void ReleaseMods() {
-    INPUT in[8]{}; int n = 0;
+    INPUT in[8]{};
+    int n = 0;
     WORD keys[] = {VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN};
     for (WORD vk : keys) {
-        in[n].type = INPUT_KEYBOARD; in[n].ki.wVk = vk; in[n].ki.dwFlags = KEYEVENTF_KEYUP; ++n;
+        in[n].type = INPUT_KEYBOARD;
+        in[n].ki.wVk = vk;
+        in[n].ki.dwFlags = KEYEVENTF_KEYUP;
+        ++n;
     }
     SendInput(n, in, sizeof(INPUT));
     Sleep(20);
 }
 
 static void Key(WORD vk, bool up) {
-    INPUT in{}; in.type = INPUT_KEYBOARD; in.ki.wVk = vk; in.ki.dwFlags = up ? KEYEVENTF_KEYUP : 0; SendInput(1, &in, sizeof(INPUT));
+    INPUT in{};
+    in.type = INPUT_KEYBOARD;
+    in.ki.wVk = vk;
+    in.ki.dwFlags = up ? KEYEVENTF_KEYUP : 0;
+    SendInput(1, &in, sizeof(INPUT));
 }
 
-static bool OpenClip() { for (int i = 0; i < 16; ++i) { if (OpenClipboard(gWnd)) return true; Sleep(10); } return false; }
+static bool OpenClip() {
+    for (int i = 0; i < 16; ++i) {
+        if (OpenClipboard(gWnd)) return true;
+        Sleep(10);
+    }
+    return false;
+}
 
 static bool GetClip(std::wstring& out) {
     if (!OpenClip()) return false;
@@ -254,7 +287,10 @@ static bool GetClip(std::wstring& out) {
     if (!h) { CloseClipboard(); return false; }
     wchar_t* p = (wchar_t*)GlobalLock(h);
     if (!p) { CloseClipboard(); return false; }
-    out = p; GlobalUnlock(h); CloseClipboard(); return true;
+    out = p;
+    GlobalUnlock(h);
+    CloseClipboard();
+    return true;
 }
 
 static bool SetClip(const std::wstring& s) {
@@ -271,24 +307,35 @@ static bool SetClip(const std::wstring& s) {
 }
 
 static void DoExpand() {
+    gExpanding = true;
     if (gTarget) { SetForegroundWindow(gTarget); Sleep(40); }
     ReleaseMods();
     for (int i = 0; i < gDeleteCount; ++i) { Key(VK_BACK, false); Key(VK_BACK, true); Sleep(1); }
-    std::wstring old; bool had = GetClip(old);
+    std::wstring old;
+    bool had = GetClip(old);
     SetClip(gPasteText);
     Sleep(30);
     Key(VK_CONTROL, false); Key('V', false); Key('V', true); Key(VK_CONTROL, true);
+    if (gDelimiterToSend) { Sleep(20); Key(gDelimiterToSend, false); Key(gDelimiterToSend, true); }
     Sleep(80);
     if (had) SetClip(old);
+    gExpanding = false;
     SetStatus(L"Expanded snippet successfully");
 }
 
-static bool OwnWindow() { HWND f = GetForegroundWindow(); return f == gWnd || IsChild(gWnd, f); }
+static bool OwnWindow() {
+    HWND f = GetForegroundWindow();
+    return f == gWnd || IsChild(gWnd, f);
+}
 
-static void ClearBuffer() { gRawBuffer.clear(); gNormBuffer.clear(); }
+static void ClearBuffer() {
+    gRawBuffer.clear();
+    gNormBuffer.clear();
+}
 
 static std::wstring KeyText(KBDLLHOOKSTRUCT* k) {
-    BYTE st[256]; if (!GetKeyboardState(st)) return L"";
+    BYTE st[256];
+    if (!GetKeyboardState(st)) return L"";
     wchar_t buf[8]{};
     int r = ToUnicodeEx(k->vkCode, k->scanCode, st, buf, 7, 0, GetKeyboardLayout(0));
     if (r > 0) return std::wstring(buf, r);
@@ -297,8 +344,15 @@ static std::wstring KeyText(KBDLLHOOKSTRUCT* k) {
     return L"";
 }
 
+static bool IsDelimiterVk(DWORD vk, WORD& outVk) {
+    if (vk == VK_SPACE) { outVk = VK_SPACE; return true; }
+    if (vk == VK_RETURN) { outVk = VK_RETURN; return true; }
+    if (vk == VK_TAB) { outVk = VK_TAB; return true; }
+    return false;
+}
+
 static LRESULT CALLBACK HookProc(int code, WPARAM wp, LPARAM lp) {
-    if (code < 0 || !gEnabled) return CallNextHookEx(gHook, code, wp, lp);
+    if (code < 0 || !gEnabled || gExpanding) return CallNextHookEx(gHook, code, wp, lp);
     if (wp != WM_KEYDOWN && wp != WM_SYSKEYDOWN) return CallNextHookEx(gHook, code, wp, lp);
     auto* k = (KBDLLHOOKSTRUCT*)lp;
     if ((k->flags & LLKHF_INJECTED) || OwnWindow()) return CallNextHookEx(gHook, code, wp, lp);
@@ -309,18 +363,49 @@ static LRESULT CALLBACK HookProc(int code, WPARAM wp, LPARAM lp) {
     if (ctrl && k->vkCode == VK_SPACE) {
         Match m = FindMatch();
         if (m.index >= 0) {
-            gTarget = GetForegroundWindow(); gDeleteCount = m.rawDelete; gPasteText = gSnips[m.index].text; ClearBuffer(); PostMessageW(gWnd, WM_DO_EXPAND, 0, 0); return 1;
+            gTarget = GetForegroundWindow();
+            gDeleteCount = m.rawDelete;
+            gDelimiterToSend = 0;
+            gPasteText = gSnips[m.index].text;
+            ClearBuffer();
+            PostMessageW(gWnd, WM_DO_EXPAND, 0, 0);
+            return 1;
         }
     }
 
-    if (k->vkCode == VK_BACK) { if (!gRawBuffer.empty()) gRawBuffer.pop_back(); gNormBuffer = Normalize(gRawBuffer); return CallNextHookEx(gHook, code, wp, lp); }
-    if (k->vkCode == VK_ESCAPE || k->vkCode == VK_LEFT || k->vkCode == VK_RIGHT || k->vkCode == VK_UP || k->vkCode == VK_DOWN || k->vkCode == VK_DELETE) { ClearBuffer(); return CallNextHookEx(gHook, code, wp, lp); }
+    if (!ctrl && !alt) {
+        WORD delimVk = 0;
+        if (IsDelimiterVk(k->vkCode, delimVk)) {
+            Match m = FindMatch();
+            if (m.index >= 0) {
+                gTarget = GetForegroundWindow();
+                gDeleteCount = m.rawDelete;
+                gDelimiterToSend = delimVk;
+                gPasteText = gSnips[m.index].text;
+                ClearBuffer();
+                PostMessageW(gWnd, WM_DO_EXPAND, 0, 0);
+                return 1;
+            }
+            ClearBuffer();
+            return CallNextHookEx(gHook, code, wp, lp);
+        }
+    }
+
+    if (k->vkCode == VK_BACK) {
+        if (!gRawBuffer.empty()) gRawBuffer.pop_back();
+        gNormBuffer = Normalize(gRawBuffer);
+        return CallNextHookEx(gHook, code, wp, lp);
+    }
+    if (k->vkCode == VK_ESCAPE || k->vkCode == VK_LEFT || k->vkCode == VK_RIGHT || k->vkCode == VK_UP || k->vkCode == VK_DOWN || k->vkCode == VK_DELETE) {
+        ClearBuffer();
+        return CallNextHookEx(gHook, code, wp, lp);
+    }
     if (ctrl || alt) return CallNextHookEx(gHook, code, wp, lp);
 
     std::wstring t = KeyText(k);
     if (!t.empty() && t[0] >= 32) {
         gRawBuffer += t;
-        if (gRawBuffer.size() > gMaxRaw) gRawBuffer.erase(0, gRawBuffer.size() - gMaxRaw);
+        if (gRawBuffer.size() > MAX_RAW_BUFFER) gRawBuffer.erase(0, gRawBuffer.size() - MAX_RAW_BUFFER);
         gNormBuffer = Normalize(gRawBuffer);
     }
     return CallNextHookEx(gHook, code, wp, lp);
@@ -329,22 +414,26 @@ static LRESULT CALLBACK HookProc(int code, WPARAM wp, LPARAM lp) {
 static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     switch (m) {
     case WM_CREATE:
-        CreateWindowW(L"STATIC", L"cmd Text Expander", WS_CHILD|WS_VISIBLE, 18, 14, 360, 28, h, 0, gInst, 0);
-        gCount = CreateWindowW(L"STATIC", L"Loaded snippets: 0", WS_CHILD|WS_VISIBLE, 18, 50, 360, 22, h, 0, gInst, 0);
-        gStatus = CreateWindowW(L"STATIC", L"Running - type keyword then Ctrl + Space", WS_CHILD|WS_VISIBLE, 18, 78, 520, 22, h, 0, gInst, 0);
-        CreateWindowW(L"BUTTON", L"Reload snippets", WS_CHILD|WS_VISIBLE, 18, 112, 140, 32, h, (HMENU)1, gInst, 0);
-        CreateWindowW(L"BUTTON", L"Enable", WS_CHILD|WS_VISIBLE, 170, 112, 90, 32, h, (HMENU)2, gInst, 0);
-        CreateWindowW(L"BUTTON", L"Disable", WS_CHILD|WS_VISIBLE, 270, 112, 90, 32, h, (HMENU)3, gInst, 0);
-        gList = CreateWindowW(L"LISTBOX", L"", WS_CHILD|WS_VISIBLE|WS_BORDER|WS_VSCROLL, 18, 158, 540, 260, h, 0, gInst, 0);
+        CreateWindowW(L"STATIC", L"cmd Text Expander", WS_CHILD | WS_VISIBLE, 18, 14, 360, 28, h, 0, gInst, 0);
+        gCount = CreateWindowW(L"STATIC", L"Loaded snippets: 0", WS_CHILD | WS_VISIBLE, 18, 50, 360, 22, h, 0, gInst, 0);
+        gStatus = CreateWindowW(L"STATIC", L"Running - type keyword then Space or Ctrl + Space", WS_CHILD | WS_VISIBLE, 18, 78, 520, 22, h, 0, gInst, 0);
+        CreateWindowW(L"BUTTON", L"Reload snippets", WS_CHILD | WS_VISIBLE, 18, 112, 140, 32, h, (HMENU)1, gInst, 0);
+        CreateWindowW(L"BUTTON", L"Enable", WS_CHILD | WS_VISIBLE, 170, 112, 90, 32, h, (HMENU)2, gInst, 0);
+        CreateWindowW(L"BUTTON", L"Disable", WS_CHILD | WS_VISIBLE, 270, 112, 90, 32, h, (HMENU)3, gInst, 0);
+        gList = CreateWindowW(L"LISTBOX", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL, 18, 158, 540, 260, h, 0, gInst, 0);
         RefreshUi();
         return 0;
     case WM_COMMAND:
-        if (LOWORD(w) == 1) { LoadSnippets(); RefreshUi(); SetStatus(L"Snippets reloaded"); }
+        if (LOWORD(w) == 1) { LoadSnippets(); RefreshUi(); ClearBuffer(); SetStatus(L"Snippets reloaded"); }
         else if (LOWORD(w) == 2) { gEnabled = true; SetStatus(L"Enabled"); }
         else if (LOWORD(w) == 3) { gEnabled = false; ClearBuffer(); SetStatus(L"Disabled"); }
         return 0;
-    case WM_DO_EXPAND: DoExpand(); return 0;
-    case WM_DESTROY: PostQuitMessage(0); return 0;
+    case WM_DO_EXPAND:
+        DoExpand();
+        return 0;
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
     }
     return DefWindowProcW(h, m, w, l);
 }
@@ -352,14 +441,23 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 int WINAPI wWinMain(HINSTANCE h, HINSTANCE, PWSTR, int show) {
     gInst = h;
     LoadSnippets();
-    WNDCLASSW wc{}; wc.lpfnWndProc = WndProc; wc.hInstance = h; wc.hCursor = LoadCursor(nullptr, IDC_ARROW); wc.hIcon = LoadIcon(nullptr, IDI_APPLICATION); wc.lpszClassName = L"cmdTextExpanderGui";
+    WNDCLASSW wc{};
+    wc.lpfnWndProc = WndProc;
+    wc.hInstance = h;
+    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wc.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
+    wc.lpszClassName = L"cmdTextExpanderGui";
     RegisterClassW(&wc);
     gWnd = CreateWindowW(wc.lpszClassName, L"cmd Text Expander", WS_OVERLAPPEDWINDOW, 100, 100, 600, 500, nullptr, nullptr, h, nullptr);
-    ShowWindow(gWnd, show); UpdateWindow(gWnd);
+    ShowWindow(gWnd, show);
+    UpdateWindow(gWnd);
     gHook = SetWindowsHookExW(WH_KEYBOARD_LL, HookProc, GetModuleHandleW(nullptr), 0);
     if (!gHook) MessageBoxW(gWnd, L"Keyboard hook failed. Try Run as administrator.", L"cmd Text Expander", MB_ICONERROR);
     MSG msg;
-    while (GetMessageW(&msg, nullptr, 0, 0)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
+    while (GetMessageW(&msg, nullptr, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
     if (gHook) UnhookWindowsHookEx(gHook);
     return 0;
 }
