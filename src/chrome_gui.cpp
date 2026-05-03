@@ -7,7 +7,6 @@
 
 #include <windows.h>
 #include <commctrl.h>
-
 #ifdef min
 #undef min
 #endif
@@ -22,17 +21,8 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
-
-// chrome Text Expander v21
-// Independent implementation of Beeftext-like behavior:
-// - global keyboard hook
-// - reverse trie matching for large snippet sets
-// - longest keyword wins
-// - Arabic-aware normalization
-// - exact raw-character deletion using event mapping
-// - clipboard paste with restoration
-// - visible GUI
 
 struct Snippet {
     std::wstring keyword;
@@ -40,17 +30,7 @@ struct Snippet {
     std::wstring text;
 };
 
-struct KeyEvent {
-    std::wstring raw;
-    std::wstring norm;
-};
-
-struct TrieNode {
-    int snippetIndex = -1;
-    std::unordered_map<wchar_t, int> next;
-};
-
-struct Match {
+struct MatchResult {
     int index = -1;
     int rawDelete = 0;
 };
@@ -62,12 +42,13 @@ static bool gEnabled = true;
 static bool gExpanding = false;
 
 static std::vector<Snippet> gSnips;
-static std::vector<TrieNode> gTrie;
-static std::vector<KeyEvent> gEvents;
-static std::wstring gNormBuffer;
+static std::unordered_map<std::wstring, std::vector<int>> gExactIndex;
+static std::unordered_map<std::wstring, std::vector<int>> gNormIndex;
+static std::unordered_set<std::wstring> gNormPrefixes;
+static size_t gMaxRawBuffer = 512;
 
-static const size_t HARD_EVENT_LIMIT = 2048;
-static size_t gMaxEvents = 512;
+static std::wstring gRawBuffer;
+static std::wstring gNormBuffer;
 
 static const UINT WM_DO_EXPAND = WM_APP + 10;
 static HWND gTarget{};
@@ -80,13 +61,11 @@ static std::wstring Utf8ToWide(const std::string& s) {
     int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s.data(), (int)s.size(), nullptr, 0);
     UINT cp = CP_UTF8;
     DWORD flags = MB_ERR_INVALID_CHARS;
-
     if (n <= 0) {
         cp = CP_ACP;
         flags = 0;
         n = MultiByteToWideChar(cp, flags, s.data(), (int)s.size(), nullptr, 0);
     }
-
     if (n <= 0) return L"";
     std::wstring out(n, 0);
     MultiByteToWideChar(cp, flags, s.data(), (int)s.size(), &out[0], n);
@@ -96,9 +75,9 @@ static std::wstring Utf8ToWide(const std::string& s) {
 static std::string WideToUtf8(const std::wstring& w) {
     if (w.empty()) return "";
     int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), nullptr, 0, nullptr, nullptr);
-    std::string out(n, 0);
-    WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), &out[0], n, nullptr, nullptr);
-    return out;
+    std::string s(n, 0);
+    WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), &s[0], n, nullptr, nullptr);
+    return s;
 }
 
 static std::string ReadFileBytes(const std::wstring& path) {
@@ -107,12 +86,6 @@ static std::string ReadFileBytes(const std::wstring& path) {
     std::ostringstream ss;
     ss << f.rdbuf();
     return ss.str();
-}
-
-static void WriteFileBytes(const std::wstring& path, const std::string& bytes) {
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    if (!f) return;
-    f.write(bytes.data(), (std::streamsize)bytes.size());
 }
 
 static std::wstring ExeDir() {
@@ -124,36 +97,29 @@ static std::wstring ExeDir() {
 }
 
 static std::wstring Trim(std::wstring s) {
-    auto sp = [](wchar_t c) {
-        return c == L' ' || c == L'\t' || c == L'\r' || c == L'\n';
-    };
+    auto sp = [](wchar_t c) { return c == L' ' || c == L'\t' || c == L'\r' || c == L'\n'; };
     while (!s.empty() && sp(s.front())) s.erase(s.begin());
     while (!s.empty() && sp(s.back())) s.pop_back();
     return s;
 }
 
 static wchar_t NormChar(wchar_t c) {
-    // Remove invisible marks, bidi marks, tatweel, and Arabic diacritics.
     if (c == 0xFEFF || c == 0x200B || c == 0x200C || c == 0x200D || c == 0x200E || c == 0x200F) return 0;
     if (c == 0x0640 || c == 0x0670 || (c >= 0x064B && c <= 0x065F) || (c >= 0x0610 && c <= 0x061A)) return 0;
     if ((c >= 0x06D6 && c <= 0x06DC) || (c >= 0x06DF && c <= 0x06E8) || (c >= 0x06EA && c <= 0x06ED)) return 0;
 
-    // Arabic/Persian digits -> ASCII digits.
     if (c >= 0x0660 && c <= 0x0669) return L'0' + (c - 0x0660);
     if (c >= 0x06F0 && c <= 0x06F9) return L'0' + (c - 0x06F0);
 
-    // Arabic letter normalization without Arabic source-code literals.
-    if (c == 0x0622 || c == 0x0623 || c == 0x0625 || c == 0x0671 || c == 0x0675) return 0x0627; // alif variants -> alif
-    if (c == 0x0649) return 0x064A; // alif maksura -> ya
-    if (c == 0x0624) return 0x0648; // waw hamza -> waw
-    if (c == 0x0626) return 0x064A; // ya hamza -> ya
-    if (c == 0x0629) return 0x0647; // ta marbuta -> ha
+    if (c == 0x0622 || c == 0x0623 || c == 0x0625 || c == 0x0671 || c == 0x0675) return 0x0627;
+    if (c == 0x0649) return 0x064A;
+    if (c == 0x0624) return 0x0648;
+    if (c == 0x0626) return 0x064A;
+    if (c == 0x0629) return 0x0647;
 
-    // Punctuation normalization.
-    if (c == 0x066B) return L'.'; // Arabic decimal separator
-    if (c == 0x066C) return L','; // Arabic thousands separator
-    if (c == 0x061B) return L';'; // Arabic semicolon
-    if (c == 0x060C) return L','; // Arabic comma
+    if (c == 0x066B) return L'.';
+    if (c == 0x066C) return L',';
+    if (c == 0x061B) return L';';
 
     return (wchar_t)towlower(c);
 }
@@ -162,11 +128,9 @@ static std::wstring Normalize(const std::wstring& in) {
     std::wstring out;
     out.reserve(in.size());
     bool lastSpace = false;
-
     for (wchar_t c : in) {
         wchar_t n = NormChar(c);
         if (!n) continue;
-
         if (n == L'\t' || n == L'\r' || n == L'\n') n = L' ';
         if (n == L' ') {
             if (!lastSpace && !out.empty()) {
@@ -175,11 +139,9 @@ static std::wstring Normalize(const std::wstring& in) {
             }
             continue;
         }
-
         out.push_back(n);
         lastSpace = false;
     }
-
     return Trim(out);
 }
 
@@ -192,11 +154,9 @@ static int Hex(wchar_t c) {
 
 static std::wstring JsonUnescape(const std::wstring& s) {
     std::wstring out;
-
     for (size_t i = 0; i < s.size(); ++i) {
         if (s[i] == L'\\' && i + 1 < s.size()) {
             wchar_t n = s[++i];
-
             if (n == L'n') out.push_back(L'\n');
             else if (n == L'r') out.push_back(L'\r');
             else if (n == L't') out.push_back(L'\t');
@@ -204,48 +164,28 @@ static std::wstring JsonUnescape(const std::wstring& s) {
             else if (n == L'"') out.push_back(L'"');
             else if (n == L'u' && i + 4 < s.size()) {
                 int a = Hex(s[i + 1]), b = Hex(s[i + 2]), c = Hex(s[i + 3]), d = Hex(s[i + 4]);
-
                 if (a >= 0 && b >= 0 && c >= 0 && d >= 0) {
                     wchar_t first = (wchar_t)((a << 12) | (b << 8) | (c << 4) | d);
                     i += 4;
-
-                    // Preserve surrogate pair if present.
                     if (first >= 0xD800 && first <= 0xDBFF && i + 6 < s.size() && s[i + 1] == L'\\' && s[i + 2] == L'u') {
                         int e = Hex(s[i + 3]), f = Hex(s[i + 4]), g = Hex(s[i + 5]), h = Hex(s[i + 6]);
                         if (e >= 0 && f >= 0 && g >= 0 && h >= 0) {
-                            wchar_t second = (wchar_t)((e << 12) | (f << 8) | (g << 4) | h);
                             out.push_back(first);
-                            out.push_back(second);
+                            out.push_back((wchar_t)((e << 12) | (f << 8) | (g << 4) | h));
                             i += 6;
-                        } else {
-                            out.push_back(first);
-                        }
-                    } else {
-                        out.push_back(first);
-                    }
+                        } else out.push_back(first);
+                    } else out.push_back(first);
                 }
-            } else {
-                out.push_back(n);
-            }
-        } else {
-            out.push_back(s[i]);
-        }
+            } else out.push_back(n);
+        } else out.push_back(s[i]);
     }
-
     return out;
 }
 
-static std::wstring JsonEscape(const std::wstring& s) {
-    std::wstring out;
-    for (wchar_t c : s) {
-        if (c == L'\\') out += L"\\\\";
-        else if (c == L'"') out += L"\\\"";
-        else if (c == L'\n') out += L"\\n";
-        else if (c == L'\r') out += L"\\r";
-        else if (c == L'\t') out += L"\\t";
-        else out.push_back(c);
-    }
-    return out;
+static std::wstring BytesToWideText(const std::string& bytes) {
+    if (bytes.size() >= 3 && (unsigned char)bytes[0] == 0xEF && (unsigned char)bytes[1] == 0xBB && (unsigned char)bytes[2] == 0xBF)
+        return Utf8ToWide(bytes.substr(3));
+    return Utf8ToWide(bytes);
 }
 
 static std::vector<std::wstring> Objects(const std::wstring& j) {
@@ -253,29 +193,18 @@ static std::vector<std::wstring> Objects(const std::wstring& j) {
     int depth = 0;
     bool in = false, esc = false;
     size_t start = 0;
-
     for (size_t i = 0; i < j.size(); ++i) {
         wchar_t c = j[i];
-
         if (in) {
             if (esc) esc = false;
             else if (c == L'\\') esc = true;
             else if (c == L'"') in = false;
             continue;
         }
-
-        if (c == L'"') {
-            in = true;
-            continue;
-        }
-
-        if (c == L'{') {
-            if (depth++ == 0) start = i;
-        } else if (c == L'}') {
-            if (depth > 0 && --depth == 0) out.push_back(j.substr(start, i - start + 1));
-        }
+        if (c == L'"') { in = true; continue; }
+        if (c == L'{') { if (depth++ == 0) start = i; }
+        else if (c == L'}') { if (depth > 0 && --depth == 0) out.push_back(j.substr(start, i - start + 1)); }
     }
-
     return out;
 }
 
@@ -283,154 +212,136 @@ static bool GetJsonString(const std::wstring& obj, const std::vector<std::wstrin
     for (const auto& k : keys) {
         size_t p = obj.find(L"\"" + k + L"\"");
         if (p == std::wstring::npos) continue;
-
         p = obj.find(L':', p);
         if (p == std::wstring::npos) continue;
-
         p = obj.find(L'"', p + 1);
         if (p == std::wstring::npos) continue;
-
         ++p;
         std::wstring raw;
         bool esc = false;
-
         for (; p < obj.size(); ++p) {
             wchar_t c = obj[p];
-
-            if (esc) {
-                raw.push_back(L'\\');
-                raw.push_back(c);
-                esc = false;
-                continue;
-            }
-
-            if (c == L'\\') {
-                esc = true;
-                continue;
-            }
-
+            if (esc) { raw.push_back(L'\\'); raw.push_back(c); esc = false; continue; }
+            if (c == L'\\') { esc = true; continue; }
             if (c == L'"') break;
             raw.push_back(c);
         }
-
         out = JsonUnescape(raw);
         return true;
     }
-
     return false;
 }
 
-static void BuildReverseTrie() {
-    gTrie.clear();
-    gTrie.emplace_back();
-    gMaxEvents = 512;
+static bool GetJsonBoolFalse(const std::wstring& obj, const std::wstring& key) {
+    size_t p = obj.find(L"\"" + key + L"\"");
+    if (p == std::wstring::npos) return false;
+    p = obj.find(L':', p);
+    if (p == std::wstring::npos) return false;
+    std::wstring tail = obj.substr(p + 1, 16);
+    std::transform(tail.begin(), tail.end(), tail.begin(), [](wchar_t c) { return (wchar_t)towlower(c); });
+    return tail.find(L"false") != std::wstring::npos;
+}
 
+static void AddSnippet(const std::wstring& key, const std::wstring& text) {
+    std::wstring k = Trim(key);
+    if (k.empty() || text.empty()) return;
+    Snippet s{k, Normalize(k), text};
+    if (s.keyNorm.empty()) return;
+    gSnips.push_back(s);
+}
+
+static void BuildIndexes() {
+    gExactIndex.clear();
+    gNormIndex.clear();
+    gNormPrefixes.clear();
+    gMaxRawBuffer = 512;
     for (size_t i = 0; i < gSnips.size(); ++i) {
-        const std::wstring& key = gSnips[i].keyNorm;
-        if (key.empty()) continue;
-
-        int node = 0;
-
-        for (auto it = key.rbegin(); it != key.rend(); ++it) {
-            wchar_t c = *it;
-            auto found = gTrie[node].next.find(c);
-
-            if (found == gTrie[node].next.end()) {
-                int newIndex = (int)gTrie.size();
-                gTrie[node].next[c] = newIndex;
-                gTrie.emplace_back();
-                node = newIndex;
-            } else {
-                node = found->second;
-            }
-        }
-
-        // Latest duplicate wins, like many text expander imports.
-        gTrie[node].snippetIndex = (int)i;
-        gMaxEvents = std::max<size_t>(gMaxEvents, gSnips[i].keyword.size() + 64);
+        gExactIndex[gSnips[i].keyword].push_back((int)i);
+        gNormIndex[gSnips[i].keyNorm].push_back((int)i);
+        gMaxRawBuffer = std::max<size_t>(gMaxRawBuffer, gSnips[i].keyword.size() + 64);
+        for (size_t n = 1; n < gSnips[i].keyNorm.size(); ++n) gNormPrefixes.insert(gSnips[i].keyNorm.substr(0, n));
     }
+}
 
-    if (gMaxEvents > HARD_EVENT_LIMIT) gMaxEvents = HARD_EVENT_LIMIT;
+static void LoadSnippetsFromText(const std::wstring& content) {
+    for (const auto& obj : Objects(content)) {
+        if (GetJsonBoolFalse(obj, L"enabled")) continue;
+        std::wstring key, text;
+        GetJsonString(obj, {L"keyword", L"key", L"shortcut", L"abbreviation", L"trigger", L"comboText"}, key);
+        GetJsonString(obj, {L"snippet", L"text", L"replacement", L"replace", L"value", L"content", L"phrase", L"substitutionText"}, text);
+        AddSnippet(key, text);
+    }
 }
 
 static void LoadSnippets() {
     gSnips.clear();
-
-    std::wstring path = ExeDir() + L"\\snippets.json";
-    std::wstring content = Utf8ToWide(ReadFileBytes(path));
-
-    for (const auto& obj : Objects(content)) {
-        std::wstring key, text;
-
-        GetJsonString(obj, {L"keyword", L"key", L"shortcut", L"abbreviation", L"trigger"}, key);
-        GetJsonString(obj, {L"text", L"snippet", L"replacement", L"replace", L"value", L"content", L"phrase"}, text);
-
-        key = Trim(key);
-        if (key.empty() || text.empty()) continue;
-
-        Snippet s{key, Normalize(key), text};
-        if (!s.keyNorm.empty()) gSnips.push_back(s);
-    }
-
+    std::wstring dir = ExeDir();
+    std::wstring snippets = BytesToWideText(ReadFileBytes(dir + L"\\snippets.json"));
+    if (!snippets.empty()) LoadSnippetsFromText(snippets);
     if (gSnips.empty()) {
-        gSnips.push_back({L";hi", Normalize(L";hi"), L"Hello"});
-        gSnips.push_back({L"ab", Normalize(L"ab"), L"Arabic-like test"});
-        gSnips.push_back({L"2.", Normalize(L"2."), L"DOT TEST"});
+        std::wstring backup = BytesToWideText(ReadFileBytes(dir + L"\\Beeftext.btbackup"));
+        if (!backup.empty()) LoadSnippetsFromText(backup);
     }
-
-    BuildReverseTrie();
+    if (gSnips.empty()) {
+        AddSnippet(L";hi", L"Hello");
+        AddSnippet(L"2.", L"DOT TEST");
+        AddSnippet(std::wstring({0x0627, 0x0628, 0x062C}), L"ARABIC TEST");
+    }
+    BuildIndexes();
 }
 
-static Match FindMatch() {
-    Match m;
-    if (gEvents.empty() || gTrie.empty()) return m;
+static bool EndsWith(const std::wstring& text, const std::wstring& suffix) {
+    return text.size() >= suffix.size() && text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
 
-    int node = 0;
-    int bestIndex = -1;
-    int bestRawDelete = 0;
-    int rawConsumed = 0;
+static int RawDeleteForNormSuffix(const std::wstring& normSuffix) {
+    std::wstring rebuilt;
+    int raw = 0;
+    for (int p = (int)gRawBuffer.size() - 1; p >= 0; --p) {
+        rebuilt.insert(rebuilt.begin(), gRawBuffer[p]);
+        ++raw;
+        if (Normalize(rebuilt) == normSuffix) return raw;
+    }
+    return (int)normSuffix.size();
+}
 
-    for (int e = (int)gEvents.size() - 1; e >= 0; --e) {
-        const KeyEvent& ev = gEvents[e];
-        rawConsumed += (int)ev.raw.size();
+static MatchResult FindMatch() {
+    MatchResult m;
+    if (gRawBuffer.empty()) return m;
 
-        // Empty normalized event: ignored character, but if it follows a keyword
-        // it should still be deleted with the keyword.
-        if (ev.norm.empty()) {
-            if (gTrie[node].snippetIndex >= 0) {
-                bestIndex = gTrie[node].snippetIndex;
-                bestRawDelete = rawConsumed;
-            }
-            continue;
-        }
-
-        for (int j = (int)ev.norm.size() - 1; j >= 0; --j) {
-            wchar_t c = ev.norm[j];
-
-            auto found = gTrie[node].next.find(c);
-            if (found == gTrie[node].next.end()) {
-                if (bestIndex >= 0) {
-                    m.index = bestIndex;
-                    m.rawDelete = bestRawDelete;
-                }
-                return m;
-            }
-
-            node = found->second;
-
-            if (gTrie[node].snippetIndex >= 0) {
-                bestIndex = gTrie[node].snippetIndex;
-                bestRawDelete = rawConsumed;
-            }
+    // Beeftext-style strict exact keyword comparison first.
+    for (const auto& kv : gExactIndex) {
+        const std::wstring& key = kv.first;
+        if (EndsWith(gRawBuffer, key)) {
+            m.index = kv.second.empty() ? -1 : kv.second.front();
+            m.rawDelete = (int)key.size();
+            return m;
         }
     }
 
-    if (bestIndex >= 0) {
-        m.index = bestIndex;
-        m.rawDelete = bestRawDelete;
+    // Normalized fallback for Arabic variants and Arabic/Persian digits.
+    if (gNormBuffer.empty()) return m;
+    size_t maxLen = std::min<size_t>(gNormBuffer.size(), gMaxRawBuffer);
+    for (size_t len = maxLen; len > 0; --len) {
+        std::wstring suffix = gNormBuffer.substr(gNormBuffer.size() - len);
+        auto it = gNormIndex.find(suffix);
+        if (it != gNormIndex.end() && !it->second.empty()) {
+            m.index = it->second.front();
+            m.rawDelete = std::max<int>(RawDeleteForNormSuffix(suffix), (int)gSnips[m.index].keyword.size());
+            return m;
+        }
     }
-
     return m;
+}
+
+static bool IsPunctuationTriggerChar(const std::wstring& t) {
+    if (t.size() != 1) return false;
+    wchar_t c = NormChar(t[0]);
+    return c == L'.' || c == L',' || c == L';' || c == L':' || c == L'!' || c == L'?';
+}
+
+static bool HasLongerPrefix(const std::wstring& norm) {
+    return gNormPrefixes.find(norm) != gNormPrefixes.end();
 }
 
 static void SetStatus(const std::wstring& s) {
@@ -438,32 +349,26 @@ static void SetStatus(const std::wstring& s) {
 }
 
 static void RefreshUi() {
-    if (gCount) {
-        SetWindowTextW(gCount, (L"Loaded snippets: " + std::to_wstring(gSnips.size())).c_str());
-    }
-
+    if (gCount) SetWindowTextW(gCount, (L"Loaded snippets: " + std::to_wstring(gSnips.size())).c_str());
     if (gList) {
         SendMessageW(gList, LB_RESETCONTENT, 0, 0);
-        int count = (int)std::min<size_t>(gSnips.size(), 200);
-
-        for (int i = 0; i < count; ++i) {
-            SendMessageW(gList, LB_ADDSTRING, 0, (LPARAM)gSnips[i].keyword.c_str());
-        }
+        int count = (int)std::min<size_t>(gSnips.size(), 300);
+        for (int i = 0; i < count; ++i) SendMessageW(gList, LB_ADDSTRING, 0, (LPARAM)gSnips[i].keyword.c_str());
     }
 }
 
 static void ReleaseMods() {
+    INPUT in[12]{};
+    int n = 0;
     WORD keys[] = {VK_CONTROL, VK_MENU, VK_SHIFT, VK_LCONTROL, VK_RCONTROL, VK_LMENU, VK_RMENU, VK_LSHIFT, VK_RSHIFT, VK_LWIN, VK_RWIN};
-
     for (WORD vk : keys) {
-        INPUT in{};
-        in.type = INPUT_KEYBOARD;
-        in.ki.wVk = vk;
-        in.ki.dwFlags = KEYEVENTF_KEYUP;
-        SendInput(1, &in, sizeof(INPUT));
+        in[n].type = INPUT_KEYBOARD;
+        in[n].ki.wVk = vk;
+        in[n].ki.dwFlags = KEYEVENTF_KEYUP;
+        ++n;
     }
-
-    Sleep(80);
+    SendInput(n, in, sizeof(INPUT));
+    Sleep(35);
 }
 
 static void Key(WORD vk, bool up) {
@@ -475,7 +380,7 @@ static void Key(WORD vk, bool up) {
 }
 
 static bool OpenClip() {
-    for (int i = 0; i < 30; ++i) {
+    for (int i = 0; i < 25; ++i) {
         if (OpenClipboard(gWnd)) return true;
         Sleep(10);
     }
@@ -485,21 +390,11 @@ static bool OpenClip() {
 static bool GetClip(std::wstring& out, bool& hadText) {
     hadText = false;
     out.clear();
-
     if (!OpenClip()) return false;
-
     HANDLE h = GetClipboardData(CF_UNICODETEXT);
-    if (!h) {
-        CloseClipboard();
-        return true;
-    }
-
+    if (!h) { CloseClipboard(); return true; }
     wchar_t* p = (wchar_t*)GlobalLock(h);
-    if (!p) {
-        CloseClipboard();
-        return true;
-    }
-
+    if (!p) { CloseClipboard(); return true; }
     out = p;
     hadText = true;
     GlobalUnlock(h);
@@ -509,46 +404,30 @@ static bool GetClip(std::wstring& out, bool& hadText) {
 
 static bool SetClip(const std::wstring& s) {
     if (!OpenClip()) return false;
-
     EmptyClipboard();
-
     size_t bytes = (s.size() + 1) * sizeof(wchar_t);
     HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!h) {
-        CloseClipboard();
-        return false;
-    }
-
+    if (!h) { CloseClipboard(); return false; }
     void* p = GlobalLock(h);
-    if (!p) {
-        GlobalFree(h);
-        CloseClipboard();
-        return false;
-    }
-
     memcpy(p, s.c_str(), bytes);
     GlobalUnlock(h);
-
     SetClipboardData(CF_UNICODETEXT, h);
     CloseClipboard();
     return true;
 }
 
 static void ClearClip() {
-    if (OpenClip()) {
-        EmptyClipboard();
-        CloseClipboard();
-    }
+    if (OpenClip()) { EmptyClipboard(); CloseClipboard(); }
+}
+
+static void ClearBuffer() {
+    gRawBuffer.clear();
+    gNormBuffer.clear();
 }
 
 static void DoExpand() {
     gExpanding = true;
-
-    if (gTarget) {
-        SetForegroundWindow(gTarget);
-        Sleep(60);
-    }
-
+    if (gTarget) { SetForegroundWindow(gTarget); Sleep(50); }
     ReleaseMods();
 
     for (int i = 0; i < gDeleteCount; ++i) {
@@ -559,15 +438,14 @@ static void DoExpand() {
 
     std::wstring old;
     bool hadText = false;
-    bool couldReadClipboard = GetClip(old, hadText);
-
+    bool readClip = GetClip(old, hadText);
     if (!SetClip(gPasteText)) {
         SetStatus(L"Clipboard busy - expansion failed");
         gExpanding = false;
         return;
     }
 
-    Sleep(40);
+    Sleep(35);
     Key(VK_CONTROL, false);
     Key('V', false);
     Key('V', true);
@@ -579,13 +457,11 @@ static void DoExpand() {
         Key(gDelimiterToSend, true);
     }
 
-    Sleep(120);
-
-    if (couldReadClipboard) {
+    Sleep(100);
+    if (readClip) {
         if (hadText) SetClip(old);
         else ClearClip();
     }
-
     gExpanding = false;
     SetStatus(L"Expanded snippet successfully");
 }
@@ -595,106 +471,69 @@ static bool OwnWindow() {
     return f == gWnd || IsChild(gWnd, f);
 }
 
-static void ClearBuffer() {
-    gEvents.clear();
-    gNormBuffer.clear();
+static void AddTextToBuffer(const std::wstring& text) {
+    gRawBuffer += text;
+    if (gRawBuffer.size() > gMaxRawBuffer) gRawBuffer.erase(0, gRawBuffer.size() - gMaxRawBuffer);
+    gNormBuffer = Normalize(gRawBuffer);
 }
 
-static void RebuildNormBuffer() {
-    gNormBuffer.clear();
-    for (const auto& ev : gEvents) {
-        gNormBuffer += ev.norm;
-    }
-}
-
-static void AddToBuffer(const std::wstring& raw) {
-    if (raw.empty()) return;
-
-    KeyEvent ev{raw, Normalize(raw)};
-    gEvents.push_back(ev);
-
-    if (gEvents.size() > gMaxEvents) {
-        size_t excess = gEvents.size() - gMaxEvents;
-        gEvents.erase(gEvents.begin(), gEvents.begin() + (ptrdiff_t)excess);
-    }
-
-    RebuildNormBuffer();
+static BYTE KeyStateByte(int vk) {
+    SHORT s = GetKeyState(vk);
+    BYTE b = 0;
+    if (s & 0x8000) b |= 0x80;
+    if (s & 0x0001) b |= 0x01;
+    return b;
 }
 
 static std::wstring KeyText(KBDLLHOOKSTRUCT* k) {
-    BYTE st[256];
-    if (!GetKeyboardState(st)) ZeroMemory(st, sizeof(st));
-
-    // Low-level keyboard hooks run before the target app updates its key state.
-    // Force the current key and live modifier states.
-    st[k->vkCode] |= 0x80;
-
-    if (GetAsyncKeyState(VK_SHIFT) & 0x8000) st[VK_SHIFT] |= 0x80;
-    if (GetAsyncKeyState(VK_CONTROL) & 0x8000) st[VK_CONTROL] |= 0x80;
-    if (GetAsyncKeyState(VK_MENU) & 0x8000) st[VK_MENU] |= 0x80;
+    BYTE st[256]{};
+    int keys[] = {VK_SHIFT, VK_LSHIFT, VK_RSHIFT, VK_CONTROL, VK_LCONTROL, VK_RCONTROL, VK_MENU, VK_LMENU, VK_RMENU, VK_RWIN, VK_LWIN, VK_CAPITAL};
+    for (int vk : keys) st[vk] = KeyStateByte(vk);
 
     HWND fg = GetForegroundWindow();
     DWORD tid = fg ? GetWindowThreadProcessId(fg, nullptr) : GetCurrentThreadId();
     HKL hkl = GetKeyboardLayout(tid);
 
-    wchar_t buf[8]{};
-    int r = ToUnicodeEx(k->vkCode, k->scanCode, st, buf, 7, 0, hkl);
-
+    wchar_t buf[16]{};
+    int r = ToUnicodeEx(k->vkCode, k->scanCode, st, buf, 15, 1 << 2, hkl);
     if (r > 0) return std::wstring(buf, r);
 
-    // Punctuation/numpad fallbacks. This fixes common cases like 2. when
-    // the layout fails to emit punctuation through ToUnicodeEx.
-    switch (k->vkCode) {
-    case VK_DECIMAL: return L".";
-    case VK_OEM_PERIOD: return L".";
-    case VK_OEM_COMMA: return L",";
-    case VK_OEM_MINUS: return L"-";
-    case VK_OEM_PLUS: return L"=";
-    case VK_OEM_1: return L";";
-    case VK_OEM_2: return L"/";
-    case VK_OEM_3: return L"`";
-    case VK_OEM_4: return L"[";
-    case VK_OEM_5: return L"\\";
-    case VK_OEM_6: return L"]";
-    case VK_OEM_7: return L"'";
-    default: break;
+    if (r == 0) {
+        switch (k->vkCode) {
+        case VK_DECIMAL: return L".";
+        case VK_OEM_PERIOD: return L".";
+        case VK_OEM_COMMA: return L",";
+        case VK_OEM_MINUS: return L"-";
+        case VK_OEM_PLUS: return L"=";
+        case VK_OEM_1: return L";";
+        case VK_OEM_2: return L"/";
+        case VK_OEM_3: return L"`";
+        case VK_OEM_4: return L"[";
+        case VK_OEM_5: return L"\\";
+        case VK_OEM_6: return L"]";
+        case VK_OEM_7: return L"'";
+        default: break;
+        }
     }
 
     if (k->vkCode >= '0' && k->vkCode <= '9') return std::wstring(1, (wchar_t)k->vkCode);
-    if (k->vkCode >= 'A' && k->vkCode <= 'Z') return std::wstring(1, (wchar_t)towlower((wchar_t)k->vkCode));
     if (k->vkCode >= VK_NUMPAD0 && k->vkCode <= VK_NUMPAD9) return std::wstring(1, (wchar_t)(L'0' + (k->vkCode - VK_NUMPAD0)));
-
     return L"";
 }
 
-static bool IsDelimiterVk(DWORD vk, WORD& outVk, std::wstring& rawDelimiter) {
-    if (vk == VK_SPACE) {
-        outVk = VK_SPACE;
-        rawDelimiter = L" ";
-        return true;
-    }
-
-    if (vk == VK_RETURN) {
-        outVk = VK_RETURN;
-        rawDelimiter = L"\n";
-        return true;
-    }
-
-    if (vk == VK_TAB) {
-        outVk = VK_TAB;
-        rawDelimiter = L"\t";
-        return true;
-    }
-
+static bool IsDelimiterVk(DWORD vk, WORD& outVk) {
+    if (vk == VK_SPACE) { outVk = VK_SPACE; return true; }
+    if (vk == VK_RETURN) { outVk = VK_RETURN; return true; }
+    if (vk == VK_TAB) { outVk = VK_TAB; return true; }
     return false;
 }
 
-static void StartExpansion(const Match& m, WORD delimiterToSend) {
+static void QueueExpansion(const MatchResult& m, int deleteAdjust, WORD delimiter) {
+    if (m.index < 0) return;
     gTarget = GetForegroundWindow();
-    gDeleteCount = m.rawDelete;
-    gDelimiterToSend = delimiterToSend;
+    gDeleteCount = std::max(0, m.rawDelete - deleteAdjust);
+    gDelimiterToSend = delimiter;
     gPasteText = gSnips[m.index].text;
-
     ClearBuffer();
     PostMessageW(gWnd, WM_DO_EXPAND, 0, 0);
 }
@@ -706,55 +545,60 @@ static LRESULT CALLBACK HookProc(int code, WPARAM wp, LPARAM lp) {
     auto* k = (KBDLLHOOKSTRUCT*)lp;
     if ((k->flags & LLKHF_INJECTED) || OwnWindow()) return CallNextHookEx(gHook, code, wp, lp);
 
-    bool ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
-    bool alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+    if (k->vkCode == VK_LSHIFT || k->vkCode == VK_RSHIFT || k->vkCode == VK_SHIFT || k->vkCode == VK_CAPITAL)
+        return CallNextHookEx(gHook, code, wp, lp);
 
-    if (ctrl && k->vkCode == VK_SPACE) {
-        Match m = FindMatch();
+    bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) || (GetKeyState(VK_LCONTROL) & 0x8000) || (GetKeyState(VK_RCONTROL) & 0x8000);
+    bool alt = (GetKeyState(VK_MENU) & 0x8000) || (GetKeyState(VK_LMENU) & 0x8000) || (GetKeyState(VK_RMENU) & 0x8000);
+    bool win = (GetKeyState(VK_LWIN) & 0x8000) || (GetKeyState(VK_RWIN) & 0x8000);
 
+    if (ctrl && !alt && !win && k->vkCode == VK_SPACE) {
+        MatchResult m = FindMatch();
         if (m.index >= 0) {
-            StartExpansion(m, 0);
+            QueueExpansion(m, 0, 0);
             return 1;
         }
     }
 
-    if (!ctrl && !alt) {
-        WORD delimVk = 0;
-        std::wstring rawDelimiter;
-
-        if (IsDelimiterVk(k->vkCode, delimVk, rawDelimiter)) {
-            Match m = FindMatch();
-
-            if (m.index >= 0) {
-                StartExpansion(m, delimVk);
-                return 1;
-            }
-
-            // Keep delimiters in the buffer to support multi-word keywords.
-            AddToBuffer(rawDelimiter);
-            return CallNextHookEx(gHook, code, wp, lp);
+    WORD delimVk = 0;
+    if (!ctrl && !alt && !win && IsDelimiterVk(k->vkCode, delimVk)) {
+        MatchResult m = FindMatch();
+        if (m.index >= 0) {
+            QueueExpansion(m, 0, delimVk);
+            return 1;
         }
-    }
-
-    if (k->vkCode == VK_BACK) {
-        if (!gEvents.empty()) gEvents.pop_back();
-        RebuildNormBuffer();
-        return CallNextHookEx(gHook, code, wp, lp);
-    }
-
-    if (k->vkCode == VK_ESCAPE || k->vkCode == VK_LEFT || k->vkCode == VK_RIGHT ||
-        k->vkCode == VK_UP || k->vkCode == VK_DOWN || k->vkCode == VK_DELETE ||
-        k->vkCode == VK_HOME || k->vkCode == VK_END) {
         ClearBuffer();
         return CallNextHookEx(gHook, code, wp, lp);
     }
 
-    if (ctrl || alt) return CallNextHookEx(gHook, code, wp, lp);
+    if (k->vkCode == VK_BACK) {
+        if (!gRawBuffer.empty()) gRawBuffer.pop_back();
+        gNormBuffer = Normalize(gRawBuffer);
+        return CallNextHookEx(gHook, code, wp, lp);
+    }
 
-    std::wstring t = KeyText(k);
+    if (k->vkCode == VK_ESCAPE || k->vkCode == VK_LEFT || k->vkCode == VK_RIGHT || k->vkCode == VK_UP || k->vkCode == VK_DOWN ||
+        k->vkCode == VK_DELETE || k->vkCode == VK_HOME || k->vkCode == VK_END || k->vkCode == VK_PRIOR || k->vkCode == VK_NEXT) {
+        ClearBuffer();
+        return CallNextHookEx(gHook, code, wp, lp);
+    }
 
-    if (!t.empty() && t[0] >= 32) {
-        AddToBuffer(t);
+    std::wstring text = KeyText(k);
+    if (text.empty()) return CallNextHookEx(gHook, code, wp, lp);
+
+    bool hadCtrlAltText = (ctrl || alt || win) && text.empty();
+    if (hadCtrlAltText) return CallNextHookEx(gHook, code, wp, lp);
+
+    AddTextToBuffer(text);
+
+    // Beeftext-like protection for multi-character keywords:
+    // Only expand immediately for punctuation-terminated keywords that are not prefixes of longer keywords.
+    if (IsPunctuationTriggerChar(text)) {
+        MatchResult m = FindMatch();
+        if (m.index >= 0 && !HasLongerPrefix(gSnips[m.index].keyNorm)) {
+            QueueExpansion(m, (int)text.size(), 0);
+            return 1;
+        }
     }
 
     return CallNextHookEx(gHook, code, wp, lp);
@@ -763,9 +607,9 @@ static LRESULT CALLBACK HookProc(int code, WPARAM wp, LPARAM lp) {
 static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     switch (m) {
     case WM_CREATE:
-        CreateWindowW(L"STATIC", L"chrome Text Expander v21", WS_CHILD | WS_VISIBLE, 18, 14, 360, 28, h, 0, gInst, 0);
-        gCount = CreateWindowW(L"STATIC", L"Loaded snippets: 0", WS_CHILD | WS_VISIBLE, 18, 50, 360, 22, h, 0, gInst, 0);
-        gStatus = CreateWindowW(L"STATIC", L"Running - keyword + Space or Ctrl + Space", WS_CHILD | WS_VISIBLE, 18, 78, 520, 22, h, 0, gInst, 0);
+        CreateWindowW(L"STATIC", L"chrome Text Expander v22", WS_CHILD | WS_VISIBLE, 18, 14, 400, 28, h, 0, gInst, 0);
+        gCount = CreateWindowW(L"STATIC", L"Loaded snippets: 0", WS_CHILD | WS_VISIBLE, 18, 50, 420, 22, h, 0, gInst, 0);
+        gStatus = CreateWindowW(L"STATIC", L"Running - Beeftext-style keyword recognition", WS_CHILD | WS_VISIBLE, 18, 78, 540, 22, h, 0, gInst, 0);
         CreateWindowW(L"BUTTON", L"Reload snippets", WS_CHILD | WS_VISIBLE, 18, 112, 140, 32, h, (HMENU)1, gInst, 0);
         CreateWindowW(L"BUTTON", L"Enable", WS_CHILD | WS_VISIBLE, 170, 112, 90, 32, h, (HMENU)2, gInst, 0);
         CreateWindowW(L"BUTTON", L"Disable", WS_CHILD | WS_VISIBLE, 270, 112, 90, 32, h, (HMENU)3, gInst, 0);
@@ -797,13 +641,11 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         PostQuitMessage(0);
         return 0;
     }
-
     return DefWindowProcW(h, m, w, l);
 }
 
 int WINAPI wWinMain(HINSTANCE h, HINSTANCE, PWSTR, int show) {
     gInst = h;
-
     LoadSnippets();
 
     WNDCLASSW wc{};
@@ -811,39 +653,21 @@ int WINAPI wWinMain(HINSTANCE h, HINSTANCE, PWSTR, int show) {
     wc.hInstance = h;
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     wc.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
-    wc.lpszClassName = L"chromeTextExpanderGuiV21";
-
+    wc.lpszClassName = L"chromeTextExpanderV22";
     RegisterClassW(&wc);
 
-    gWnd = CreateWindowW(
-        wc.lpszClassName,
-        L"chrome Text Expander",
-        WS_OVERLAPPEDWINDOW,
-        100,
-        100,
-        600,
-        500,
-        nullptr,
-        nullptr,
-        h,
-        nullptr
-    );
-
+    gWnd = CreateWindowW(wc.lpszClassName, L"chrome Text Expander", WS_OVERLAPPEDWINDOW, 100, 100, 600, 500, nullptr, nullptr, h, nullptr);
     ShowWindow(gWnd, show);
     UpdateWindow(gWnd);
 
     gHook = SetWindowsHookExW(WH_KEYBOARD_LL, HookProc, GetModuleHandleW(nullptr), 0);
-
-    if (!gHook) {
-        MessageBoxW(gWnd, L"Keyboard hook failed. Try Run as administrator.", L"chrome Text Expander", MB_ICONERROR);
-    }
+    if (!gHook) MessageBoxW(gWnd, L"Keyboard hook failed. Try Run as administrator.", L"chrome Text Expander", MB_ICONERROR);
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
-
     if (gHook) UnhookWindowsHookEx(gHook);
     return 0;
 }

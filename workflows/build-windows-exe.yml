@@ -1,4 +1,4 @@
-name: Build cmd
+name: Build chrome
 
 on:
   push:
@@ -16,15 +16,15 @@ jobs:
       - name: Setup MSVC developer command prompt
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Build cmd Text Expander
+      - name: Build portable chrome
         shell: cmd
         run: build.bat
 
       - name: Validate Windows executable
         shell: powershell
         run: |
-          if (!(Test-Path "publish\cmd.exe")) { throw "publish\cmd.exe was not created" }
-          $bytes = [System.IO.File]::ReadAllBytes("publish\cmd.exe")
+          if (!(Test-Path "publish\chrome.exe")) { throw "publish\chrome.exe was not created" }
+          $bytes = [System.IO.File]::ReadAllBytes("publish\chrome.exe")
           if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw "Not a Windows EXE: missing MZ header" }
           Write-Host "Valid Windows EXE MZ header found"
 
@@ -32,13 +32,22 @@ jobs:
         shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path artifact | Out-Null
-          Copy-Item "publish\cmd.exe" "artifact\cmd.exe"
-          Copy-Item "README.md" "artifact\README.md"
-          Copy-Item "snippets.json" "artifact\snippets.json"
+          Copy-Item "publish\chrome.exe" "artifact\chrome.exe" -Force
+          Copy-Item "README.md" "artifact\README.md" -Force
+          Copy-Item "snippets.json" "artifact\snippets.json" -Force
+          if (Test-Path "Beeftext.btbackup") { Copy-Item "Beeftext.btbackup" "artifact\Beeftext.btbackup" -Force }
+          $readme = @(
+            "chrome Text Expander v22",
+            "",
+            "Run chrome.exe.",
+            "Use keyword + Space / Enter / Tab, or Ctrl + Space.",
+            "This version uses Beeftext-style key processing and matching behavior."
+          )
+          $readme | Set-Content -Path "artifact\README_RUN_FIRST.txt" -Encoding UTF8
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cmd_v20_final_smart_engine_release
+          name: chrome_v22_beeftext_style_engine_release
           path: artifact/*
           if-no-files-found: error
