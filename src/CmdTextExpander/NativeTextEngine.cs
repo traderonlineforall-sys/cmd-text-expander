@@ -48,7 +48,7 @@ public sealed class NativeTextEngine : IDisposable
         }
         _enabled = true;
         _buffer.Clear();
-        _status("Enabled. Beeftext-style expansion is active.");
+        _status("Enabled. Beeftext trigger: keyword + Space/Enter/Tab.");
     }
 
     public void Stop()
@@ -91,23 +91,27 @@ public sealed class NativeTextEngine : IDisposable
             return CallNextHookEx(_hook, nCode, wParam, lParam);
         }
 
-        if (key == Keys.Escape || key == Keys.Left || key == Keys.Right || key == Keys.Up || key == Keys.Down || key == Keys.Home || key == Keys.End || key == Keys.Delete)
+        if (IsResetKey(key))
         {
             _buffer.Clear();
             return CallNextHookEx(_hook, nCode, wParam, lParam);
         }
 
-        if (IsDelimiter(key))
+        if (IsTriggerKey(key))
         {
             var keyword = _buffer.ToString();
-            var delimiterMatch = _store.MatchKeyword(keyword);
             _buffer.Clear();
-            if (delimiterMatch is not null)
+
+            var match = _store.MatchKeyword(keyword);
+            if (match is not null)
             {
                 _expansionPending = true;
-                QueueReplacement(targetWindow, keyword.Length, delimiterMatch.Text, 35);
+                QueueReplacement(targetWindow, keyword.Length, match.Text, 45);
+                // Suppress Space/Enter/Tab just like Beeftext-style trigger expansion.
+                // Normal typed keyword stays visible until the replacement operation deletes it.
                 return (IntPtr)1;
             }
+
             return CallNextHookEx(_hook, nCode, wParam, lParam);
         }
 
@@ -122,19 +126,6 @@ public sealed class NativeTextEngine : IDisposable
         _buffer.Append(printable);
         if (_buffer.Length > 120) _buffer.Remove(0, _buffer.Length - 120);
 
-        var candidate = _buffer.ToString();
-        var matchNow = FindImmediateMatch(candidate);
-        if (matchNow is not null)
-        {
-            var charsToDelete = matchNow.Keyword.Length;
-            _buffer.Clear();
-            _expansionPending = true;
-            QueueReplacement(targetWindow, charsToDelete, matchNow.Text, 75);
-            // Do NOT block the final typed key. Let Windows type it first, then replace the whole keyword.
-            // This prevents losing characters when expansion fails or starts too early.
-            return CallNextHookEx(_hook, nCode, wParam, lParam);
-        }
-
         return CallNextHookEx(_hook, nCode, wParam, lParam);
     }
 
@@ -145,7 +136,11 @@ public sealed class NativeTextEngine : IDisposable
             Thread.Sleep(delayMs);
             try
             {
-                if (_ui.IsDisposed) return;
+                if (_ui.IsDisposed)
+                {
+                    _expansionPending = false;
+                    return;
+                }
                 _ui.BeginInvoke(new Action(() => ReplaceInTargetWindow(targetWindow, charsToDelete, replacement)));
             }
             catch
@@ -153,16 +148,6 @@ public sealed class NativeTextEngine : IDisposable
                 _expansionPending = false;
             }
         });
-    }
-
-    private Snippet? FindImmediateMatch(string buffer)
-    {
-        if (string.IsNullOrEmpty(buffer)) return null;
-
-        return _store.Snippets
-            .Where(x => x.Enabled && !string.IsNullOrWhiteSpace(x.Keyword))
-            .OrderByDescending(x => x.Keyword.Length)
-            .FirstOrDefault(x => buffer.EndsWith(x.Keyword, StringComparison.Ordinal));
     }
 
     private bool IsOurOwnWindowActive()
@@ -180,9 +165,15 @@ public sealed class NativeTextEngine : IDisposable
         }
     }
 
-    private static bool IsDelimiter(Keys key)
+    private static bool IsTriggerKey(Keys key)
     {
         return key == Keys.Space || key == Keys.Enter || key == Keys.Tab;
+    }
+
+    private static bool IsResetKey(Keys key)
+    {
+        return key == Keys.Escape || key == Keys.Left || key == Keys.Right || key == Keys.Up || key == Keys.Down ||
+               key == Keys.Home || key == Keys.End || key == Keys.Delete || key == Keys.PageDown || key == Keys.PageUp;
     }
 
     private void ReplaceInTargetWindow(IntPtr targetWindow, int charsToDelete, string replacement)
@@ -201,12 +192,12 @@ public sealed class NativeTextEngine : IDisposable
             if (charsToDelete > 0)
             {
                 SendBackspaces(charsToDelete);
-                Thread.Sleep(15);
+                Thread.Sleep(20);
             }
 
             var oldText = Clipboard.ContainsText() ? Clipboard.GetText() : null;
             Clipboard.SetText(replacement ?? string.Empty);
-            Thread.Sleep(25);
+            Thread.Sleep(30);
             SendCtrlV();
             _status("Expanded snippet.");
 
