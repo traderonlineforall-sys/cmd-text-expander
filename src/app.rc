@@ -1,8 +1,8 @@
 #include <windows.h>
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,0,0,0
- PRODUCTVERSION 1,0,0,0
+ FILEVERSION 1,2,0,0
+ PRODUCTVERSION 1,2,0,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -17,13 +17,14 @@ BEGIN
     BEGIN
         BLOCK "040904B0"
         BEGIN
-            VALUE "CompanyName", "cmd Text Expander"
-            VALUE "FileDescription", "Portable text expander for Windows"
-            VALUE "FileVersion", "1.0.0.0"
+            VALUE "CompanyName", "cmd Productivity Tools"
+            VALUE "FileDescription", "cmd Text Expander - Portable Windows productivity tool"
+            VALUE "FileVersion", "1.2.0.0"
             VALUE "InternalName", "cmdTextExpander"
             VALUE "OriginalFilename", "cmdTextExpander.exe"
-            VALUE "ProductName", "cmd Native Text Expander"
-            VALUE "ProductVersion", "1.0.0.0"
+            VALUE "ProductName", "cmd Text Expander"
+            VALUE "ProductVersion", "1.2.0.0"
+            VALUE "LegalCopyright", "cmd Productivity Tools"
         END
     END
     BLOCK "VarFileInfo"
