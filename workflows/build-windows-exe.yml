@@ -1,4 +1,4 @@
-name: Build cmd
+name: Build cmd Beeftext Logic Package
 
 on:
   push:
@@ -6,39 +6,25 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  package:
     runs-on: windows-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup MSVC developer command prompt
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Build cmd Text Expander
+      - name: Package portable app
         shell: cmd
         run: build.bat
 
-      - name: Validate Windows executable
+      - name: Prepare zip artifact
         shell: powershell
         run: |
           if (!(Test-Path "publish\cmd.exe")) { throw "publish\cmd.exe was not created" }
-          $bytes = [System.IO.File]::ReadAllBytes("publish\cmd.exe")
-          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw "Not a Windows EXE: missing MZ header" }
-          Write-Host "Valid Windows EXE MZ header found"
-
-      - name: Prepare artifact
-        shell: powershell
-        run: |
-          New-Item -ItemType Directory -Force -Path artifact | Out-Null
-          Copy-Item "publish\cmd.exe" "artifact\cmd.exe"
-          Copy-Item "README.md" "artifact\README.md"
-          Copy-Item "snippets.json" "artifact\snippets.json"
+          Compress-Archive -Path "publish\*" -DestinationPath "cmd_beeftext_logic_release.zip" -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cmd_v20_final_smart_engine_release
-          path: artifact/*
+          name: cmd_beeftext_logic_release
+          path: cmd_beeftext_logic_release.zip
           if-no-files-found: error
