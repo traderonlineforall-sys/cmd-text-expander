@@ -1,9 +1,8 @@
 @echo off
-rem Build script for cmd text expander
-rem This batch file compiles src\cmd.cpp into a portable executable.
+rem Build script for cmd text expander GUI
 
 setlocal
-set SRC=src\cmd.cpp
+set SRC=src\cmd_gui.cpp
 set OUTDIR=publish
 set OUTEXE=%OUTDIR%\cmd.exe
 
@@ -15,20 +14,12 @@ if errorlevel 1 (
     exit /b 1
 )
 
-rem Locate the VC++ compiler (cl.exe). Assume we are running from a
-rem Developer Command Prompt for Visual Studio or GitHub Actions windows-latest.
 echo Compiling %SRC%...
 
-rem user32.lib is required for keyboard hook, input, message loop, hotkey,
-rem clipboard, and layout APIs such as ToUnicodeEx, GetMessageW,
-rem RegisterHotKey, OpenClipboard, SendInput, SetWindowsHookExW, etc.
+rem Build the visible Win32 GUI version, not a black console window.
+rem user32.lib is required for the GUI, keyboard hook, clipboard, and SendInput APIs.
 rem gdi32.lib is linked for standard Windows GUI compatibility.
-rem
-rem IMPORTANT:
-rem Build as a CONSOLE subsystem with wWinMainCRTStartup so the program has
-rem a visible window while it runs. The previous WINDOWS subsystem build was
-rem working in the background but did not show any visible interface.
-cl /nologo /EHsc /O2 /W3 %SRC% user32.lib gdi32.lib /link /SUBSYSTEM:CONSOLE /ENTRY:wWinMainCRTStartup /OUT:%OUTEXE%
+cl /nologo /EHsc /O2 /W3 %SRC% user32.lib gdi32.lib comctl32.lib /link /SUBSYSTEM:WINDOWS /OUT:%OUTEXE%
 
 if errorlevel 1 (
     echo Build failed.
