@@ -23,7 +23,12 @@ rem user32.lib is required for keyboard hook, input, message loop, hotkey,
 rem clipboard, and layout APIs such as ToUnicodeEx, GetMessageW,
 rem RegisterHotKey, OpenClipboard, SendInput, SetWindowsHookExW, etc.
 rem gdi32.lib is linked for standard Windows GUI compatibility.
-cl /nologo /EHsc /O2 /W3 %SRC% user32.lib gdi32.lib /link /SUBSYSTEM:WINDOWS /OUT:%OUTEXE%
+rem
+rem IMPORTANT:
+rem Build as a CONSOLE subsystem with wWinMainCRTStartup so the program has
+rem a visible window while it runs. The previous WINDOWS subsystem build was
+rem working in the background but did not show any visible interface.
+cl /nologo /EHsc /O2 /W3 %SRC% user32.lib gdi32.lib /link /SUBSYSTEM:CONSOLE /ENTRY:wWinMainCRTStartup /OUT:%OUTEXE%
 
 if errorlevel 1 (
     echo Build failed.
