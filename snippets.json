@@ -1,0 +1,14 @@
+[
+  {
+    "keyword": ";hi",
+    "text": "أهلاً بحضرتك، معاك إسلام من خدمة عملاء WE. ازاي أقدر أساعد حضرتك؟",
+    "group": "Default",
+    "enabled": true
+  },
+  {
+    "keyword": ";thanks",
+    "text": "تحت أمرك يا فندم، سعدت بمساعدة حضرتك ونتمنالك يوم سعيد.",
+    "group": "Default",
+    "enabled": true
+  }
+]
