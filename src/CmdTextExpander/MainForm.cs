@@ -4,19 +4,12 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
-using System.Threading;
 using System.Windows.Forms;
 
 namespace CmdTextExpander;
 
 public sealed class MainForm : Form
 {
-    private const int HOTKEY_ID = 7135;
-    private const int WM_HOTKEY = 0x0312;
-    private const uint MOD_CONTROL = 0x0002;
-    private const uint VK_SPACE = 0x20;
-
     private readonly SnippetStore _store;
     private readonly NativeTextEngine _engine;
     private readonly BindingList<Snippet> _view = new();
@@ -31,24 +24,15 @@ public sealed class MainForm : Form
     private readonly NotifyIcon _tray;
     private string? _editingId;
 
-    private static readonly Color Bg = Color.FromArgb(11, 18, 32);
-    private static readonly Color PanelBg = Color.FromArgb(15, 23, 42);
-    private static readonly Color SoftPanel = Color.FromArgb(17, 24, 39);
-    private static readonly Color TextColor = Color.FromArgb(226, 232, 240);
-    private static readonly Color Muted = Color.FromArgb(148, 163, 184);
-    private static readonly Color Blue = Color.FromArgb(37, 99, 235);
-    private static readonly Color Green = Color.FromArgb(34, 197, 94);
-    private static readonly Color Red = Color.FromArgb(239, 68, 68);
-
     public MainForm()
     {
         Text = "cmd";
-        Width = 1180;
+        Width = 1120;
         Height = 760;
-        MinimumSize = new Size(980, 640);
+        MinimumSize = new Size(960, 620);
         StartPosition = FormStartPosition.CenterScreen;
-        BackColor = Bg;
-        ForeColor = TextColor;
+        BackColor = Color.FromArgb(11, 18, 32);
+        ForeColor = Color.FromArgb(226, 232, 240);
         Font = new Font("Segoe UI", 10);
 
         var dataPath = Path.Combine(AppContext.BaseDirectory, "snippets.json");
@@ -57,52 +41,16 @@ public sealed class MainForm : Form
         _tray = BuildTrayIcon();
 
         BuildLayout();
-        try
-        {
-            _engine.Start();
-        }
-        catch (Exception ex)
-        {
-            SetStatus("Text expander could not start: " + ex.Message);
-        }
         RefreshGrid();
-    }
-
-    protected override void OnHandleCreated(EventArgs e)
-    {
-        base.OnHandleCreated(e);
-        if (RegisterHotKey(Handle, HOTKEY_ID, MOD_CONTROL, VK_SPACE))
-        {
-            SetStatus("Ready. Ctrl + Space opens quick canned picker.");
-        }
-        else
-        {
-            SetStatus("Ready. Ctrl + Space hotkey is already used by another app.");
-        }
-    }
-
-    protected override void OnHandleDestroyed(EventArgs e)
-    {
-        UnregisterHotKey(Handle, HOTKEY_ID);
-        base.OnHandleDestroyed(e);
-    }
-
-    protected override void WndProc(ref Message m)
-    {
-        if (m.Msg == WM_HOTKEY && m.WParam.ToInt32() == HOTKEY_ID)
-        {
-            ShowQuickPicker();
-            return;
-        }
-        base.WndProc(ref m);
+        _engine.Start();
     }
 
     private NotifyIcon BuildTrayIcon()
     {
         var menu = new ContextMenuStrip();
         menu.Items.Add("Show", null, (_, _) => ShowFromTray());
-        menu.Items.Add("Enable Expander", null, (_, _) => { _engine.Start(); RefreshGrid(); });
-        menu.Items.Add("Disable Expander", null, (_, _) => { _engine.Stop(); RefreshGrid(); });
+        menu.Items.Add("Enable Expander", null, (_, _) => _engine.Start());
+        menu.Items.Add("Disable Expander", null, (_, _) => _engine.Stop());
         menu.Items.Add("Exit", null, (_, _) => Close());
 
         var icon = new NotifyIcon
@@ -118,137 +66,102 @@ public sealed class MainForm : Form
 
     private void BuildLayout()
     {
-        SuspendLayout();
-
         var header = new Panel
         {
             Dock = DockStyle.Top,
-            Height = 92,
-            BackColor = PanelBg,
+            Height = 86,
+            BackColor = Color.FromArgb(15, 23, 42),
             Padding = new Padding(14)
         };
-
-        var body = new SplitContainer
-        {
-            Dock = DockStyle.Fill,
-            SplitterDistance = 690,
-            Panel1MinSize = 480,
-            Panel2MinSize = 390,
-            BackColor = Bg,
-            FixedPanel = FixedPanel.Panel2
-        };
-
-        Controls.Add(body);
         Controls.Add(header);
 
         var title = new Label
         {
             Text = "cmd — Portable Text Expander",
-            AutoSize = false,
-            Left = 14,
-            Top = 12,
-            Width = 350,
-            Height = 32,
+            Dock = DockStyle.Left,
+            Width = 360,
             Font = new Font("Segoe UI", 18, FontStyle.Bold),
             ForeColor = Color.White,
             TextAlign = ContentAlignment.MiddleLeft
         };
         header.Controls.Add(title);
 
-        var subtitle = new Label
-        {
-            Text = "Type keyword + Space, or press Ctrl + Space to open canned picker.",
-            AutoSize = false,
-            Left = 16,
-            Top = 48,
-            Width = 700,
-            Height = 22,
-            ForeColor = Muted,
-            TextAlign = ContentAlignment.MiddleLeft
-        };
-        header.Controls.Add(subtitle);
-
         _enableButton.Text = "Enable";
-        StyleButton(_enableButton, Green, Color.White);
-        _enableButton.SetBounds(380, 18, 110, 38);
-        _enableButton.Click += (_, _) => { _engine.Start(); RefreshGrid(); };
+        _enableButton.Width = 110;
+        _enableButton.Height = 38;
+        _enableButton.Left = 385;
+        _enableButton.Top = 22;
+        _enableButton.BackColor = Color.FromArgb(34, 197, 94);
+        _enableButton.ForeColor = Color.White;
+        _enableButton.FlatStyle = FlatStyle.Flat;
+        _enableButton.Click += (_, _) => _engine.Start();
         header.Controls.Add(_enableButton);
 
         _disableButton.Text = "Disable";
-        StyleButton(_disableButton, Red, Color.White);
-        _disableButton.SetBounds(502, 18, 110, 38);
-        _disableButton.Click += (_, _) => { _engine.Stop(); RefreshGrid(); };
+        _disableButton.Width = 110;
+        _disableButton.Height = 38;
+        _disableButton.Left = 505;
+        _disableButton.Top = 22;
+        _disableButton.BackColor = Color.FromArgb(239, 68, 68);
+        _disableButton.ForeColor = Color.White;
+        _disableButton.FlatStyle = FlatStyle.Flat;
+        _disableButton.Click += (_, _) => _engine.Stop();
         header.Controls.Add(_disableButton);
 
-        var quickButton = new Button { Text = "Quick Picker" };
-        StyleButton(quickButton, Blue, Color.White);
-        quickButton.SetBounds(624, 18, 140, 38);
-        quickButton.Click += (_, _) => ShowQuickPicker();
-        header.Controls.Add(quickButton);
-
-        var openData = new Button { Text = "Open Data Folder" };
-        StyleButton(openData, Blue, Color.White);
-        openData.SetBounds(776, 18, 160, 38);
+        var openData = new Button
+        {
+            Text = "Open Data Folder",
+            Width = 150,
+            Height = 38,
+            Left = 625,
+            Top = 22,
+            BackColor = Color.FromArgb(37, 99, 235),
+            ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat
+        };
         openData.Click += (_, _) => Process.Start("explorer.exe", AppContext.BaseDirectory);
         header.Controls.Add(openData);
 
         _status.Text = "Ready";
-        _status.AutoSize = false;
-        _status.Left = 950;
-        _status.Top = 16;
-        _status.Width = 210;
-        _status.Height = 52;
-        _status.ForeColor = Muted;
-        _status.TextAlign = ContentAlignment.MiddleLeft;
+        _status.Dock = DockStyle.Bottom;
+        _status.Height = 24;
+        _status.ForeColor = Color.FromArgb(148, 163, 184);
         header.Controls.Add(_status);
 
-        BuildLibraryPanel(body.Panel1);
-        BuildEditorPanel(body.Panel2);
+        var split = new SplitContainer
+        {
+            Dock = DockStyle.Fill,
+            SplitterDistance = 640,
+            BackColor = Color.FromArgb(11, 18, 32)
+        };
+        Controls.Add(split);
 
-        ResumeLayout(true);
-    }
-
-    private static void StyleButton(Button button, Color back, Color fore)
-    {
-        button.BackColor = back;
-        button.ForeColor = fore;
-        button.FlatStyle = FlatStyle.Flat;
-        button.FlatAppearance.BorderSize = 0;
-        button.Font = new Font("Segoe UI", 10, FontStyle.Bold);
-        button.Cursor = Cursors.Hand;
+        BuildLibraryPanel(split.Panel1);
+        BuildEditorPanel(split.Panel2);
     }
 
     private void BuildLibraryPanel(Control parent)
     {
         parent.Padding = new Padding(12);
-        parent.BackColor = Bg;
+        parent.BackColor = Color.FromArgb(11, 18, 32);
 
-        var searchRow = new TableLayoutPanel
-        {
-            Dock = DockStyle.Top,
-            Height = 52,
-            BackColor = Bg,
-            ColumnCount = 3,
-            RowCount = 1,
-            Padding = new Padding(0, 6, 0, 6)
-        };
-        searchRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        searchRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 138));
-        searchRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 138));
+        var searchRow = new Panel { Dock = DockStyle.Top, Height = 52, BackColor = Color.FromArgb(11, 18, 32) };
         parent.Controls.Add(searchRow);
-
         _searchBox.PlaceholderText = "Search keyword or text...";
-        _searchBox.Dock = DockStyle.Fill;
-        searchRow.Controls.Add(_searchBox, 0, 0);
+        _searchBox.Left = 0;
+        _searchBox.Top = 8;
+        _searchBox.Width = 420;
+        _searchBox.Height = 32;
         _searchBox.TextChanged += (_, _) => RefreshGrid();
+        searchRow.Controls.Add(_searchBox);
 
-        var exportButton = new Button { Text = "Export Backup", Dock = DockStyle.Fill };
+        var exportButton = new Button { Text = "Export Backup", Left = 435, Top = 6, Width = 130, Height = 34 };
         exportButton.Click += (_, _) => ExportBackup();
-        searchRow.Controls.Add(exportButton, 1, 0);
+        searchRow.Controls.Add(exportButton);
 
-        var importButton = new Button { Text = "Import Backup", Dock = DockStyle.Fill };
+        var importButton = new Button { Text = "Import Backup", Left = 575, Top = 6, Width = 130, Height = 34 };
         importButton.Click += (_, _) => ImportBackup();
-        searchRow.Controls.Add(importButton, 2, 0);
+        searchRow.Controls.Add(importButton);
 
         _grid.Dock = DockStyle.Fill;
         _grid.AutoGenerateColumns = false;
@@ -256,19 +169,14 @@ public sealed class MainForm : Form
         _grid.ReadOnly = true;
         _grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
         _grid.MultiSelect = false;
-        _grid.RowHeadersVisible = false;
-        _grid.BackgroundColor = PanelBg;
+        _grid.BackgroundColor = Color.FromArgb(15, 23, 42);
         _grid.GridColor = Color.FromArgb(51, 65, 85);
         _grid.ForeColor = Color.White;
-        _grid.DefaultCellStyle.BackColor = SoftPanel;
-        _grid.DefaultCellStyle.ForeColor = Color.White;
-        _grid.DefaultCellStyle.SelectionBackColor = Blue;
-        _grid.DefaultCellStyle.SelectionForeColor = Color.White;
         _grid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(30, 41, 59);
         _grid.ColumnHeadersDefaultCellStyle.ForeColor = Color.White;
         _grid.EnableHeadersVisualStyles = false;
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Keyword", DataPropertyName = "Keyword", Width = 145 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Group", DataPropertyName = "Group", Width = 115 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Keyword", DataPropertyName = "Keyword", Width = 140 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Group", DataPropertyName = "Group", Width = 110 });
         _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Text", DataPropertyName = "Text", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
         _grid.CellDoubleClick += (_, _) => LoadSelectedForEdit();
         parent.Controls.Add(_grid);
@@ -277,114 +185,66 @@ public sealed class MainForm : Form
     private void BuildEditorPanel(Control parent)
     {
         parent.Padding = new Padding(14);
-        parent.BackColor = PanelBg;
-
-        var layout = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            BackColor = PanelBg,
-            ColumnCount = 1,
-            RowCount = 9,
-            Padding = new Padding(0),
-            AutoSize = false
-        };
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 130));
-        parent.Controls.Add(layout);
+        parent.BackColor = Color.FromArgb(15, 23, 42);
 
         var heading = new Label
         {
             Text = "Add / Edit Canned Response",
-            Dock = DockStyle.Fill,
+            Dock = DockStyle.Top,
+            Height = 38,
             Font = new Font("Segoe UI", 14, FontStyle.Bold),
-            ForeColor = Color.White,
-            TextAlign = ContentAlignment.MiddleLeft
+            ForeColor = Color.White
         };
-        layout.Controls.Add(heading, 0, 0);
+        parent.Controls.Add(heading);
 
-        layout.Controls.Add(MakeLabel("Keyword — الاختصار المطلوب"), 0, 1);
-        _keywordBox.Dock = DockStyle.Fill;
-        _keywordBox.PlaceholderText = "مثال: ;hi أو .شكر";
-        _keywordBox.BackColor = Color.White;
-        _keywordBox.ForeColor = Color.Black;
-        layout.Controls.Add(_keywordBox, 0, 2);
+        var panel = new Panel { Dock = DockStyle.Top, Height = 390, Padding = new Padding(0, 12, 0, 0), BackColor = Color.FromArgb(15, 23, 42) };
+        parent.Controls.Add(panel);
 
-        layout.Controls.Add(MakeLabel("Group — التصنيف اختياري"), 0, 3);
-        _groupBox.Dock = DockStyle.Fill;
-        _groupBox.PlaceholderText = "مثال: Support / Billing / Technical";
-        _groupBox.BackColor = Color.White;
-        _groupBox.ForeColor = Color.Black;
-        layout.Controls.Add(_groupBox, 0, 4);
+        AddLabel(panel, "Keyword", 0);
+        _keywordBox.SetBounds(0, 28, 390, 32);
+        _keywordBox.PlaceholderText = "Example: ;hi";
+        panel.Controls.Add(_keywordBox);
 
-        layout.Controls.Add(MakeLabel("Snippet Text — النص الكامل"), 0, 5);
-        _snippetBox.Dock = DockStyle.Fill;
+        AddLabel(panel, "Group", 72);
+        _groupBox.SetBounds(0, 100, 390, 32);
+        _groupBox.PlaceholderText = "Optional category";
+        panel.Controls.Add(_groupBox);
+
+        AddLabel(panel, "Snippet Text", 144);
         _snippetBox.Multiline = true;
         _snippetBox.ScrollBars = ScrollBars.Vertical;
-        _snippetBox.AcceptsReturn = true;
-        _snippetBox.AcceptsTab = true;
-        _snippetBox.BackColor = Color.White;
-        _snippetBox.ForeColor = Color.Black;
-        layout.Controls.Add(_snippetBox, 0, 6);
+        _snippetBox.SetBounds(0, 172, 390, 160);
+        panel.Controls.Add(_snippetBox);
 
-        var buttons = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 4,
-            RowCount = 1,
-            BackColor = PanelBg,
-            Padding = new Padding(0, 8, 0, 4)
-        };
-        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
-        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
-        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
-        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
-        layout.Controls.Add(buttons, 0, 7);
-
-        var save = new Button { Text = "Save", Dock = DockStyle.Fill };
-        StyleButton(save, Blue, Color.White);
+        var save = new Button { Text = "Save", Left = 0, Top = 346, Width = 90, Height = 34, BackColor = Color.FromArgb(37, 99, 235), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
         save.Click += (_, _) => SaveSnippet();
-        buttons.Controls.Add(save, 0, 0);
+        panel.Controls.Add(save);
 
-        var clear = new Button { Text = "New", Dock = DockStyle.Fill };
+        var clear = new Button { Text = "New", Left = 100, Top = 346, Width = 90, Height = 34 };
         clear.Click += (_, _) => ClearEditor();
-        buttons.Controls.Add(clear, 1, 0);
+        panel.Controls.Add(clear);
 
-        var delete = new Button { Text = "Delete", Dock = DockStyle.Fill };
-        StyleButton(delete, Red, Color.White);
+        var delete = new Button { Text = "Delete", Left = 200, Top = 346, Width = 90, Height = 34, BackColor = Color.FromArgb(239, 68, 68), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
         delete.Click += (_, _) => DeleteSelected();
-        buttons.Controls.Add(delete, 2, 0);
+        panel.Controls.Add(delete);
 
-        var copy = new Button { Text = "Copy Text", Dock = DockStyle.Fill };
+        var copy = new Button { Text = "Copy Text", Left = 300, Top = 346, Width = 90, Height = 34 };
         copy.Click += (_, _) => Clipboard.SetText(_snippetBox.Text ?? string.Empty);
-        buttons.Controls.Add(copy, 3, 0);
+        panel.Controls.Add(copy);
 
         var hint = new Label
         {
             Dock = DockStyle.Fill,
-            Text = "طريقة الاستخدام:\n1. اكتب Keyword مثل ;hi في الخانة الأولى.\n2. اكتب الرد الكامل في Snippet Text.\n3. اضغط Save.\n4. افتح Notepad أو Chrome واكتب الاختصار ثم Space / Enter / Tab.\n5. أو اضغط Ctrl + Space من أي مكان لفتح قائمة الكاندات.\n\nدبل كليك على أي سطر من المكتبة لتعديله.",
+            Text = "How to use:\n1. Add a keyword like ;hi\n2. Write the full response.\n3. Open any normal text field in Windows.\n4. Type the keyword. It will expand automatically when it matches a saved canned response.",
             ForeColor = Color.FromArgb(203, 213, 225),
-            Padding = new Padding(0, 8, 0, 0),
-            TextAlign = ContentAlignment.TopLeft
+            Padding = new Padding(0, 12, 0, 0)
         };
-        layout.Controls.Add(hint, 0, 8);
+        parent.Controls.Add(hint);
     }
 
-    private static Label MakeLabel(string text)
+    private static void AddLabel(Control parent, string text, int top)
     {
-        return new Label
-        {
-            Text = text,
-            Dock = DockStyle.Fill,
-            ForeColor = Muted,
-            TextAlign = ContentAlignment.BottomLeft
-        };
+        parent.Controls.Add(new Label { Text = text, Left = 0, Top = top, Width = 390, Height = 22, ForeColor = Color.FromArgb(148, 163, 184) });
     }
 
     private void RefreshGrid()
@@ -397,7 +257,6 @@ public sealed class MainForm : Form
             .ToList();
         _view.Clear();
         foreach (var item in items) _view.Add(item);
-        _grid.DataSource = null;
         _grid.DataSource = _view;
         SetStatus($"{items.Count} snippets loaded. Expander is {(_engine.Enabled ? "enabled" : "disabled")}.");
     }
@@ -406,14 +265,12 @@ public sealed class MainForm : Form
     {
         if (string.IsNullOrWhiteSpace(_keywordBox.Text))
         {
-            MessageBox.Show("Keyword is required. اكتب الاختصار في أول خانة.", "cmd", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            _keywordBox.Focus();
+            MessageBox.Show("Keyword is required.", "cmd", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
         if (string.IsNullOrEmpty(_snippetBox.Text))
         {
-            MessageBox.Show("Snippet text is required. اكتب النص الكامل.", "cmd", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            _snippetBox.Focus();
+            MessageBox.Show("Snippet text is required.", "cmd", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
@@ -462,7 +319,6 @@ public sealed class MainForm : Form
         _keywordBox.Clear();
         _groupBox.Clear();
         _snippetBox.Clear();
-        _keywordBox.Focus();
     }
 
     private void ExportBackup()
@@ -487,51 +343,6 @@ public sealed class MainForm : Form
         }
     }
 
-    private void ShowQuickPicker()
-    {
-        var targetWindow = GetForegroundWindow();
-        using var picker = new QuickPickerForm(_store.Snippets);
-        var result = picker.ShowDialog(this);
-        if (result == DialogResult.OK && picker.SelectedSnippet is not null)
-        {
-            PasteSnippetToTarget(targetWindow, picker.SelectedSnippet.Text);
-        }
-    }
-
-    private void PasteSnippetToTarget(IntPtr targetWindow, string text)
-    {
-        try
-        {
-            var oldText = Clipboard.ContainsText() ? Clipboard.GetText() : null;
-            Clipboard.SetText(text ?? string.Empty);
-
-            if (targetWindow != IntPtr.Zero && targetWindow != Handle)
-            {
-                SetForegroundWindow(targetWindow);
-                Thread.Sleep(120);
-            }
-
-            SendKeys.SendWait("^v");
-            SetStatus("Selected canned pasted.");
-
-            if (oldText is not null)
-            {
-                var timer = new System.Windows.Forms.Timer { Interval = 500 };
-                timer.Tick += (_, _) =>
-                {
-                    timer.Stop();
-                    timer.Dispose();
-                    try { Clipboard.SetText(oldText); } catch { }
-                };
-                timer.Start();
-            }
-        }
-        catch (Exception ex)
-        {
-            SetStatus("Paste failed: " + ex.Message);
-        }
-    }
-
     private void SetStatus(string message)
     {
         if (InvokeRequired)
@@ -552,8 +363,11 @@ public sealed class MainForm : Form
     protected override void OnResize(EventArgs e)
     {
         base.OnResize(e);
-        // Keep the main window visible when minimized. The tray icon remains available,
-        // but the app will not auto-hide anymore.
+        if (WindowState == FormWindowState.Minimized)
+        {
+            Hide();
+            _tray.ShowBalloonTip(900, "cmd", "Text expander is still running in the tray.", ToolTipIcon.Info);
+        }
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
@@ -563,16 +377,4 @@ public sealed class MainForm : Form
         _engine.Dispose();
         base.OnFormClosing(e);
     }
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetForegroundWindow();
-
-    [DllImport("user32.dll")]
-    private static extern bool SetForegroundWindow(IntPtr hWnd);
 }
