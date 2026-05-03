@@ -27,9 +27,9 @@ public sealed class MainForm : Form
     public MainForm()
     {
         Text = "cmd";
-        Width = 1120;
-        Height = 760;
-        MinimumSize = new Size(960, 620);
+        Width = 1220;
+        Height = 780;
+        MinimumSize = new Size(1050, 650);
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Color.FromArgb(11, 18, 32);
         ForeColor = Color.FromArgb(226, 232, 240);
@@ -131,8 +131,11 @@ public sealed class MainForm : Form
         var split = new SplitContainer
         {
             Dock = DockStyle.Fill,
-            SplitterDistance = 640,
-            BackColor = Color.FromArgb(11, 18, 32)
+            SplitterDistance = 700,
+            BackColor = Color.FromArgb(11, 18, 32),
+            Panel1MinSize = 520,
+            Panel2MinSize = 430,
+            FixedPanel = FixedPanel.Panel2
         };
         Controls.Add(split);
 
@@ -184,60 +187,72 @@ public sealed class MainForm : Form
 
     private void BuildEditorPanel(Control parent)
     {
-        parent.Padding = new Padding(14);
+        parent.Padding = new Padding(18);
         parent.BackColor = Color.FromArgb(15, 23, 42);
 
         var heading = new Label
         {
             Text = "Add / Edit Canned Response",
             Dock = DockStyle.Top,
-            Height = 38,
+            Height = 44,
             Font = new Font("Segoe UI", 14, FontStyle.Bold),
             ForeColor = Color.White
         };
         parent.Controls.Add(heading);
 
-        var panel = new Panel { Dock = DockStyle.Top, Height = 390, Padding = new Padding(0, 12, 0, 0), BackColor = Color.FromArgb(15, 23, 42) };
+        var panel = new Panel
+        {
+            Dock = DockStyle.Top,
+            Height = 440,
+            Padding = new Padding(0, 8, 0, 0),
+            BackColor = Color.FromArgb(15, 23, 42)
+        };
         parent.Controls.Add(panel);
 
-        AddLabel(panel, "Keyword", 0);
-        _keywordBox.SetBounds(0, 28, 390, 32);
-        _keywordBox.PlaceholderText = "Example: ;hi";
+        AddLabel(panel, "Keyword / الاختصار", 0);
+        _keywordBox.SetBounds(0, 26, 380, 34);
+        _keywordBox.PlaceholderText = "Example: ;hi or ;35";
+        _keywordBox.BackColor = Color.White;
+        _keywordBox.ForeColor = Color.Black;
         panel.Controls.Add(_keywordBox);
 
-        AddLabel(panel, "Group", 72);
-        _groupBox.SetBounds(0, 100, 390, 32);
+        AddLabel(panel, "Group / التصنيف", 72);
+        _groupBox.SetBounds(0, 98, 380, 34);
         _groupBox.PlaceholderText = "Optional category";
+        _groupBox.BackColor = Color.White;
+        _groupBox.ForeColor = Color.Black;
         panel.Controls.Add(_groupBox);
 
-        AddLabel(panel, "Snippet Text", 144);
+        AddLabel(panel, "Snippet Text / النص الكامل", 144);
         _snippetBox.Multiline = true;
         _snippetBox.ScrollBars = ScrollBars.Vertical;
-        _snippetBox.SetBounds(0, 172, 390, 160);
+        _snippetBox.SetBounds(0, 170, 380, 170);
+        _snippetBox.BackColor = Color.White;
+        _snippetBox.ForeColor = Color.Black;
         panel.Controls.Add(_snippetBox);
 
-        var save = new Button { Text = "Save", Left = 0, Top = 346, Width = 90, Height = 34, BackColor = Color.FromArgb(37, 99, 235), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
+        var save = new Button { Text = "Save", Left = 0, Top = 354, Width = 90, Height = 36, BackColor = Color.FromArgb(37, 99, 235), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
         save.Click += (_, _) => SaveSnippet();
         panel.Controls.Add(save);
 
-        var clear = new Button { Text = "New", Left = 100, Top = 346, Width = 90, Height = 34 };
+        var clear = new Button { Text = "New", Left = 100, Top = 354, Width = 90, Height = 36 };
         clear.Click += (_, _) => ClearEditor();
         panel.Controls.Add(clear);
 
-        var delete = new Button { Text = "Delete", Left = 200, Top = 346, Width = 90, Height = 34, BackColor = Color.FromArgb(239, 68, 68), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
+        var delete = new Button { Text = "Delete", Left = 200, Top = 354, Width = 90, Height = 36, BackColor = Color.FromArgb(239, 68, 68), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
         delete.Click += (_, _) => DeleteSelected();
         panel.Controls.Add(delete);
 
-        var copy = new Button { Text = "Copy Text", Left = 300, Top = 346, Width = 90, Height = 34 };
+        var copy = new Button { Text = "Copy Text", Left = 300, Top = 354, Width = 90, Height = 36 };
         copy.Click += (_, _) => Clipboard.SetText(_snippetBox.Text ?? string.Empty);
         panel.Controls.Add(copy);
 
         var hint = new Label
         {
             Dock = DockStyle.Fill,
-            Text = "How to use:\n1. Add a keyword like ;hi\n2. Write the full response.\n3. Open any normal text field in Windows.\n4. Type the keyword. It will expand automatically when it matches a saved canned response.",
+            Text = "How to use:\n1. Add a keyword like ;hi or ;35.\n2. Write the full response.\n3. Open any normal text field in Windows.\n4. Type the keyword. It expands automatically when it matches a saved canned response.",
             ForeColor = Color.FromArgb(203, 213, 225),
-            Padding = new Padding(0, 12, 0, 0)
+            Padding = new Padding(0, 8, 0, 0)
         };
         parent.Controls.Add(hint);
     }
@@ -265,12 +280,14 @@ public sealed class MainForm : Form
     {
         if (string.IsNullOrWhiteSpace(_keywordBox.Text))
         {
-            MessageBox.Show("Keyword is required.", "cmd", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show("Keyword is required. اكتب الاختصار في خانة Keyword.", "cmd", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            _keywordBox.Focus();
             return;
         }
         if (string.IsNullOrEmpty(_snippetBox.Text))
         {
-            MessageBox.Show("Snippet text is required.", "cmd", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show("Snippet text is required. اكتب النص الكامل.", "cmd", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            _snippetBox.Focus();
             return;
         }
 
@@ -319,11 +336,12 @@ public sealed class MainForm : Form
         _keywordBox.Clear();
         _groupBox.Clear();
         _snippetBox.Clear();
+        _keywordBox.Focus();
     }
 
     private void ExportBackup()
     {
-        using var dialog = new SaveFileDialog { Filter = "JSON backup (*.json)|*.json", FileName = "cmd-snippets.json" };
+        using var dialog = new SaveFileDialog { Filter = "JSON backup (*.json)|*.json|Beeftext backup (*.btbackup)|*.btbackup", FileName = "cmd-snippets.json" };
         if (dialog.ShowDialog(this) == DialogResult.OK)
         {
             File.Copy(Path.Combine(AppContext.BaseDirectory, "snippets.json"), dialog.FileName, true);
@@ -333,13 +351,19 @@ public sealed class MainForm : Form
 
     private void ImportBackup()
     {
-        using var dialog = new OpenFileDialog { Filter = "JSON backup (*.json)|*.json" };
+        using var dialog = new OpenFileDialog { Filter = "Backup files (*.json;*.btbackup)|*.json;*.btbackup|JSON backup (*.json)|*.json|Beeftext backup (*.btbackup)|*.btbackup|All files (*.*)|*.*" };
         if (dialog.ShowDialog(this) == DialogResult.OK)
         {
-            File.Copy(dialog.FileName, Path.Combine(AppContext.BaseDirectory, "snippets.json"), true);
-            _store.Load();
-            RefreshGrid();
-            SetStatus("Backup imported.");
+            try
+            {
+                _store.ImportFromFile(dialog.FileName);
+                RefreshGrid();
+                SetStatus("Backup imported.");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Could not import backup: " + ex.Message, "cmd", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
     }
 
