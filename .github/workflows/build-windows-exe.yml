@@ -16,15 +16,15 @@ jobs:
       - name: Setup MSVC developer command prompt
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Build native portable cmd.exe
+      - name: Build native portable release
         shell: cmd
         run: build.bat
 
       - name: Validate Windows executable
         shell: powershell
         run: |
-          if (!(Test-Path "publish\cmd.exe")) { throw "publish\cmd.exe was not created" }
-          $bytes = [System.IO.File]::ReadAllBytes("publish\cmd.exe")
+          if (!(Test-Path "publish\cmdTextExpander.exe")) { throw "publish\cmdTextExpander.exe was not created" }
+          $bytes = [System.IO.File]::ReadAllBytes("publish\cmdTextExpander.exe")
           if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw "Not a Windows EXE: missing MZ header" }
           Write-Host "Valid Windows EXE MZ header found"
 
@@ -32,13 +32,20 @@ jobs:
         shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path artifact | Out-Null
-          Copy-Item "publish\cmd.exe" "artifact\cmd.exe"
+          Copy-Item "publish\cmdTextExpander.exe" "artifact\cmdTextExpander.exe"
           Copy-Item "README.md" "artifact\README.md"
           Copy-Item "snippets.json" "artifact\snippets.json"
+          @'
+cmd Text Expander
+
+Run cmdTextExpander.exe.
+This release intentionally does not include a cmd.exe alias because that filename can look suspicious to Windows protection.
+For strongest Windows trust, sign cmdTextExpander.exe with a real code signing certificate.
+'@ | Set-Content -Path "artifact\README_RUN_FIRST.txt" -Encoding UTF8
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cmd_native_text_expander_final
+          name: cmd_text_expander_trusted_named_release
           path: artifact/*
           if-no-files-found: error
