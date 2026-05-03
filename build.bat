@@ -9,6 +9,9 @@ if errorlevel 1 exit /b 1
 where rc >nul 2>nul
 if errorlevel 1 exit /b 1
 
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='src\cmd.cpp'; $lines=[System.IO.File]::ReadAllLines($p); for($i=0; $i -lt $lines.Length; $i++){ if($lines[$i] -like '*case VK_OEM_5:*'){ $lines[$i]='    case VK_OEM_5: return L\"\\\\\";'; } }; [System.IO.File]::WriteAllLines($p,$lines,[System.Text.UTF8Encoding]::new($false))"
+if errorlevel 1 exit /b 1
+
 rc /nologo /fo publish\app.res src\app.rc
 if errorlevel 1 exit /b 1
 
