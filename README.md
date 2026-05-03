@@ -1,4 +1,4 @@
-# cmd Text Expander v21
+# chrome Text Expander v21
 
 Independent Windows text-expander with Beeftext-like behavior.
 
@@ -30,7 +30,7 @@ This is not Beeftext and does not ship Beeftext binaries. It implements the same
 
 ## Usage
 
-Keep `snippets.json` beside `cmd.exe`.
+Keep `snippets.json` beside `chrome.exe`.
 
 Example:
 
@@ -41,7 +41,7 @@ Example:
 ]
 ```
 
-Run `cmd.exe`, type the keyword in Notepad/Chrome/Outlook, then press Space or Ctrl + Space.
+Run `chrome.exe`, type the keyword in Notepad/Chrome/Outlook, then press Space or Ctrl + Space.
 
 ## Build
 
