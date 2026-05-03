@@ -1,33 +1,48 @@
-# cmd Beeftext Logic Package
+# cmd Text Expander v21
 
-This package uses the original Beeftext portable runtime supplied in `cmd.zip`, renamed to `cmd.exe`, with the user's `Beeftext.btbackup` preloaded as `comboList.json` in the portable data locations.
+Independent Windows text-expander with Beeftext-like behavior.
 
-## Run locally
+## Why this version
 
-Open:
+This is not Beeftext and does not ship Beeftext binaries. It implements the same class of behavior independently:
 
-```text
-app\cmd.exe
+- type a keyword
+- press Space / Enter / Tab, or Ctrl + Space
+- the keyword is deleted
+- the snippet is pasted
+- clipboard is restored
+
+## v21 engine
+
+- Reverse trie matching for large snippet sets.
+- Longest match wins.
+- Exact raw delete mapping, fixing cases like `2.` leaving `2`.
+- Arabic-aware normalization:
+  - أ / إ / آ / ٱ => ا
+  - ى => ي
+  - ة => ه
+  - ؤ => و
+  - ئ => ي
+  - removes tashkeel, tatweel, bidi marks, zero-width marks
+  - Arabic/Persian digits => English digits
+- Uses active foreground keyboard layout for Arabic typing.
+- Visible GUI window.
+
+## Usage
+
+Keep `snippets.json` beside `cmd.exe`.
+
+Example:
+
+```json
+[
+  { "keyword": "2.", "text": "DOT TEST" },
+  { "keyword": "ابج", "text": "ARABIC TEST" }
+]
 ```
 
-Keep the program running while typing.
+Run `cmd.exe`, type the keyword in Notepad/Chrome/Outlook, then press Space or Ctrl + Space.
 
-## GitHub Actions
+## Build
 
-Upload the repository contents, then run the workflow. The artifact will be:
-
-```text
-cmd_beeftext_logic_release
-```
-
-Inside it, run:
-
-```text
-cmd.exe
-```
-
-## Notes
-
-- The app uses Beeftext's real expansion engine, not the experimental custom hook engine.
-- Your original backup is included as `Beeftext.btbackup`.
-- If the combo list is not loaded automatically on a specific machine, import `Beeftext.btbackup` from the app's Import option.
+Run `build.bat` in a Visual Studio Developer Command Prompt, or use the included GitHub Actions workflow.
