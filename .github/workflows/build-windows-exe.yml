@@ -1,4 +1,4 @@
-name: Build cmd Text Expander
+name: Build Native cmd Text Expander
 
 on:
   push:
@@ -13,12 +13,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
+      - name: Setup MSVC developer command prompt
+        uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Build portable cmd.exe
+      - name: Build native portable cmd.exe
         shell: cmd
         run: build.bat
 
@@ -36,12 +34,11 @@ jobs:
           New-Item -ItemType Directory -Force -Path artifact | Out-Null
           Copy-Item "publish\cmd.exe" "artifact\cmd.exe"
           Copy-Item "README.md" "artifact\README.md"
-          Copy-Item "build.bat" "artifact\build.bat"
           Copy-Item "snippets.json" "artifact\snippets.json"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cmd_text_expander_final
+          name: cmd_native_text_expander_final
           path: artifact/*
           if-no-files-found: error
