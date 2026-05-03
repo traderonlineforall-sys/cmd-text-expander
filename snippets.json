@@ -1,10 +1,14 @@
 [
   {
     "keyword": ";hi",
-    "text": "Hello there!"
+    "group": "Default",
+    "text": "أهلاً بحضرتك، معاك إسلام من خدمة عملاء WE. ازاي أقدر أساعد حضرتك؟",
+    "enabled": true
   },
   {
-    "keyword": ";sig",
-    "text": "Best regards,\nYour Name"
+    "keyword": ";thanks",
+    "group": "Default",
+    "text": "تحت أمرك يا فندم، سعدت بمساعدة حضرتك ونتمنالك يوم سعيد.",
+    "enabled": true
   }
 ]

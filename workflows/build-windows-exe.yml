@@ -1,37 +1,44 @@
-name: Build cmd Text Expander
+name: Build cmd
 
 on:
   push:
-    branches: ["main"]
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
+
     steps:
-      - uses: actions/checkout@v3
-      - name: Set up MSVC
-        uses: microsoft/setup-msbuild@v1.1
-        with:
-          vs-version: 'latest'
-      - name: Build
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSVC developer command prompt
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build portable cmd
         shell: cmd
+        run: build.bat
+
+      - name: Validate Windows executable
+        shell: powershell
         run: |
-          cd cmd_final
-          build.bat
-      - name: Package artifact
-        shell: bash
+          if (!(Test-Path "publish\cmd.exe")) { throw "publish\cmd.exe was not created" }
+          $bytes = [System.IO.File]::ReadAllBytes("publish\cmd.exe")
+          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw "Not a Windows EXE: missing MZ header" }
+          Write-Host "Valid Windows EXE MZ header found"
+
+      - name: Prepare artifact
+        shell: powershell
         run: |
-          mkdir -p artifact
-          cp -a cmd_final/publish/cmd.exe artifact/
-          cp -a cmd_final/README.md artifact/
-          cp -a cmd_final/snippets.json artifact/
-          cp -a cmd_final/build.bat artifact/
-          # Create zip
-          cd artifact
-          zip -r9 ../cmd_text_expander_release.zip .
+          New-Item -ItemType Directory -Force -Path artifact | Out-Null
+          Copy-Item "publish\cmd.exe" "artifact\cmd.exe"
+          Copy-Item "README.md" "artifact\README.md"
+          Copy-Item "snippets.json" "artifact\snippets.json"
+
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: cmd_text_expander_release
-          path: cmd_text_expander_release.zip
+          name: cmd_v19_final_reliability_release
+          path: artifact/*
+          if-no-files-found: error
