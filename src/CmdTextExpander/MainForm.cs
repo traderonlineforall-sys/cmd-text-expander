@@ -236,7 +236,6 @@ public sealed class MainForm : Form
     {
         parent.Padding = new Padding(14);
         parent.BackColor = PanelBg;
-        parent.AutoScroll = true;
 
         var layout = new TableLayoutPanel
         {
